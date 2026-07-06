@@ -1136,9 +1136,9 @@ export class Tabs {
                 if (this.activeTab) {
                     title = `${this.activeTab.modified ? MODIFED_MARK : ""}${
                         this.activeTab.titleStr
-                    } - EEZ Studio`;
+                    } - MEP FORK - EEZ Studio`;
                 } else {
-                    title = `EEZ Studio`;
+                    title = `MEP FORK - EEZ Studio`;
                 }
 
                 document.title = title;

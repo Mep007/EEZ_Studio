@@ -22,7 +22,7 @@ import {
     isEnumType,
     getEnumTypeNameFromType
 } from "project-editor/features/variable/value-type";
-import { IEezObject, MessageType } from "project-editor/core/object";
+import { IEezObject, MessageType, getParent } from "project-editor/core/object";
 import {
     getLvglBitmapSourceFile,
     getLvglStylePropName
@@ -40,9 +40,28 @@ import { ColorFormat, ColorFormatType } from "project-editor/features/style/colo
 
 interface Identifiers {
     identifiers: string[];
+    entries: {
+        identifier: string;
+        objectStructGroupIdentifier?: string;
+    }[];
+    objectStructRoots: Map<Page, ObjectStructNode>;
     widgetToIdentifier: Map<LVGLWidget, string>;
     widgetToAccessor: Map<LVGLWidget, string>;
     widgetToIndex: Map<LVGLWidget, number>;
+}
+
+interface ObjectStructField {
+    identifier: string;
+    childNode?: ObjectStructNode;
+}
+
+interface ObjectStructNode {
+    typeIdentifier: string;
+    memberIdentifier: string;
+    objectFieldIdentifier: string;
+    accessorPrefix: string;
+    fields: ObjectStructField[];
+    usedFieldIdentifiers: Set<string>;
 }
 
 interface StateVar {
@@ -95,6 +114,8 @@ export class LVGLBuild extends Build {
     } = {
         fromPage: {
             identifiers: [],
+            entries: [],
+            objectStructRoots: new Map(),
             widgetToIdentifier: new Map(),
             widgetToAccessor: new Map(),
             widgetToIndex: new Map()
@@ -235,7 +256,8 @@ export class LVGLBuild extends Build {
             widgets: LVGLWidget[],
             pageIdentifiers: Identifiers,
             prefix: string,
-            isUserWidget: boolean
+            isUserWidget: boolean,
+            objectStructGroupIdentifier?: string
         ) => {
             let startIndex = isUserWidget
                 ? pageIdentifiers.identifiers.length
@@ -276,7 +298,11 @@ export class LVGLBuild extends Build {
                         ? `((lv_obj_t **)&objects)[startWidgetIndex + ${
                               pageIdentifiers.identifiers.length - startIndex
                           }]`
-                        : `objects.${prefix + identifier}`
+                        : objectStructGroupIdentifier
+                          ? `objects.${objectStructGroupIdentifier}.${
+                                prefix + identifier
+                            }`
+                          : `objects.${prefix + identifier}`
                 );
 
                 pageIdentifiers.widgetToIndex.set(
@@ -285,6 +311,10 @@ export class LVGLBuild extends Build {
                 );
 
                 pageIdentifiers.identifiers.push(prefix + identifier);
+                pageIdentifiers.entries.push({
+                    identifier: prefix + identifier,
+                    objectStructGroupIdentifier
+                });
 
                 if (widget instanceof ProjectEditor.LVGLUserWidgetWidgetClass) {
                     const page = widget.userWidgetPage;
@@ -294,7 +324,8 @@ export class LVGLBuild extends Build {
                                 identifier +
                                 USER_WIDGET_IDENTIFIER_SEPARATOR,
                             page,
-                            pageIdentifiers
+                            pageIdentifiers,
+                            objectStructGroupIdentifier
                         );
                     }
                 }
@@ -304,7 +335,8 @@ export class LVGLBuild extends Build {
         const addIdentifiersForUserWidget = (
             prefix: string,
             page: Page,
-            pageIdentifiers: Identifiers
+            pageIdentifiers: Identifiers,
+            objectStructGroupIdentifier?: string
         ) => {
             let savedGenIndex = genIndex;
             genIndex = 0;
@@ -314,38 +346,231 @@ export class LVGLBuild extends Build {
                     page
                 );
             if (widgets) {
-                addPageIdentifiers(widgets, pageIdentifiers, prefix, true);
+                addPageIdentifiers(
+                    widgets,
+                    pageIdentifiers,
+                    prefix,
+                    true,
+                    objectStructGroupIdentifier
+                );
             }
 
             genIndex = savedGenIndex;
         };
 
-        for (const page of this.pages) {
-            if (!page.isUsedAsUserWidget) {
-                const identifier = getName(
+        const addScreenIdentifier = (page: Page) => {
+            const identifier = getName(
+                "",
+                page.name,
+                NamingConvention.UnderscoreLowerCase
+            );
+
+            this.lvglObjectIdentifiers.fromPage.widgetToIdentifier.set(
+                page.lvglScreenWidget!,
+                identifier
+            );
+
+            this.lvglObjectIdentifiers.fromPage.widgetToAccessor.set(
+                page.lvglScreenWidget!,
+                this.useScreenObjectStructs
+                    ? `objects.${identifier}.${identifier}`
+                    : `objects.${identifier}`
+            );
+
+            this.lvglObjectIdentifiers.fromPage.widgetToIndex.set(
+                page.lvglScreenWidget!,
+                this.lvglObjectIdentifiers.fromPage.identifiers.length
+            );
+
+            this.lvglObjectIdentifiers.fromPage.identifiers.push(identifier);
+            this.lvglObjectIdentifiers.fromPage.entries.push({
+                identifier,
+                objectStructGroupIdentifier: this.useScreenObjectStructs
+                    ? identifier
+                    : undefined
+            });
+
+            return identifier;
+        };
+
+        const getWidgetIdentifier = (widget: LVGLWidget) => {
+            let identifier;
+
+            if (widget.identifier) {
+                identifier = getName(
                     "",
-                    page.name,
+                    widget.identifier,
                     NamingConvention.UnderscoreLowerCase
                 );
+            } else {
+                identifier =
+                    this.assets.map.lvglWidgetGeneratedIdentifiers[
+                        widget.objID
+                    ];
 
-                this.lvglObjectIdentifiers.fromPage.widgetToIdentifier.set(
-                    page.lvglScreenWidget!,
-                    identifier
+                if (!identifier) {
+                    identifier = generateUniqueObjectName();
+
+                    this.assets.map.lvglWidgetGeneratedIdentifiers[
+                        widget.objID
+                    ] = identifier;
+                }
+            }
+
+            return identifier;
+        };
+
+        const addNestedObjectIdentifier = (
+            pageIdentifiers: Identifiers,
+            widget: LVGLWidget,
+            identifier: string,
+            accessor: string,
+            objectStructGroupIdentifier: string
+        ) => {
+            pageIdentifiers.widgetToIdentifier.set(widget, identifier);
+            pageIdentifiers.widgetToAccessor.set(widget, accessor);
+            pageIdentifiers.widgetToIndex.set(
+                widget,
+                pageIdentifiers.identifiers.length
+            );
+            pageIdentifiers.identifiers.push(identifier);
+            pageIdentifiers.entries.push({
+                identifier,
+                objectStructGroupIdentifier
+            });
+        };
+
+        const addNestedPageIdentifiers = (
+            page: Page,
+            screenIdentifier: string
+        ) => {
+            const pageIdentifiers = this.lvglObjectIdentifiers.fromPage;
+            const rootNode: ObjectStructNode = {
+                typeIdentifier: `${screenIdentifier}_objects`,
+                memberIdentifier: screenIdentifier,
+                objectFieldIdentifier: screenIdentifier,
+                accessorPrefix: `objects.${screenIdentifier}`,
+                fields: [{ identifier: screenIdentifier }],
+                usedFieldIdentifiers: new Set([screenIdentifier])
+            };
+            pageIdentifiers.objectStructRoots.set(page, rootNode);
+
+            const nodeByWidget = new Map<LVGLWidget, ObjectStructNode>();
+            nodeByWidget.set(page.lvglScreenWidget!, rootNode);
+
+            const getUniqueFieldIdentifier = (
+                node: ObjectStructNode,
+                identifier: string
+            ) => {
+                let uniqueIdentifier = identifier;
+                let index = 1;
+
+                while (node.usedFieldIdentifiers.has(uniqueIdentifier)) {
+                    uniqueIdentifier = `${identifier}_${index}`;
+                    index++;
+                }
+
+                node.usedFieldIdentifiers.add(uniqueIdentifier);
+
+                return uniqueIdentifier;
+            };
+
+            const getParentNode = (widget: LVGLWidget) => {
+                let parentWidget = this.getParentLvglWidget(widget);
+
+                while (parentWidget) {
+                    if (
+                        this.isObjectStructWidget(parentWidget) &&
+                        parentWidget.identifier
+                    ) {
+                        return ensureNode(parentWidget);
+                    }
+
+                    if (parentWidget instanceof ProjectEditor.LVGLScreenWidgetClass) {
+                        return rootNode;
+                    }
+
+                    parentWidget = this.getParentLvglWidget(parentWidget);
+                }
+
+                return rootNode;
+            };
+
+            const ensureNode = (widget: LVGLWidget): ObjectStructNode => {
+                let node = nodeByWidget.get(widget);
+                if (node) {
+                    return node;
+                }
+
+                const parentNode = getParentNode(widget);
+                const identifier = getUniqueFieldIdentifier(
+                    parentNode,
+                    getWidgetIdentifier(widget)
+                );
+                const parentTypeIdentifier =
+                    parentNode.typeIdentifier.replace(/_objects$/, "");
+                node = {
+                    typeIdentifier: `${parentTypeIdentifier}_${identifier}_objects`,
+                    memberIdentifier: identifier,
+                    objectFieldIdentifier: "obj",
+                    accessorPrefix: `${parentNode.accessorPrefix}.${identifier}`,
+                    fields: [{ identifier: "obj" }],
+                    usedFieldIdentifiers: new Set(["obj"])
+                };
+                nodeByWidget.set(widget, node);
+                parentNode.fields.push({
+                    identifier,
+                    childNode: node
+                });
+
+                addNestedObjectIdentifier(
+                    pageIdentifiers,
+                    widget,
+                    identifier,
+                    `${node.accessorPrefix}.obj`,
+                    screenIdentifier
                 );
 
-                this.lvglObjectIdentifiers.fromPage.widgetToAccessor.set(
-                    page.lvglScreenWidget!,
-                    `objects.${identifier}`
-                );
+                return node;
+            };
 
-                this.lvglObjectIdentifiers.fromPage.widgetToIndex.set(
-                    page.lvglScreenWidget!,
-                    this.lvglObjectIdentifiers.fromPage.identifiers.length
-                );
+            const addWidget = (widget: LVGLWidget) => {
+                if (widget == page.lvglScreenWidget) {
+                    return;
+                }
 
-                this.lvglObjectIdentifiers.fromPage.identifiers.push(
-                    identifier
+                if (this.isObjectStructWidget(widget) && widget.identifier) {
+                    ensureNode(widget);
+                    return;
+                }
+
+                const parentNode = getParentNode(widget);
+                const identifier = getUniqueFieldIdentifier(
+                    parentNode,
+                    getWidgetIdentifier(widget)
                 );
+                parentNode.fields.push({ identifier });
+                addNestedObjectIdentifier(
+                    pageIdentifiers,
+                    widget,
+                    identifier,
+                    `${parentNode.accessorPrefix}.${identifier}`,
+                    screenIdentifier
+                );
+            };
+
+            this.lvglObjectsAccessibleFromSourceCode.fromPage
+                .filter(widget => ProjectEditor.getPage(widget) == page)
+                .forEach(addWidget);
+        };
+
+        for (const page of this.pages) {
+            if (!page.isUsedAsUserWidget) {
+                const identifier = addScreenIdentifier(page);
+
+                if (this.useScreenObjectStructs) {
+                    addNestedPageIdentifiers(page, identifier);
+                }
             } else {
                 const widgets =
                     this.lvglObjectsAccessibleFromSourceCode.fromUserWidgets.get(
@@ -354,6 +579,8 @@ export class LVGLBuild extends Build {
 
                 let pageIdentifiers: Identifiers = {
                     identifiers: [],
+                    entries: [],
+                    objectStructRoots: new Map(),
                     widgetToIdentifier: new Map(),
                     widgetToAccessor: new Map(),
                     widgetToIndex: new Map()
@@ -368,22 +595,24 @@ export class LVGLBuild extends Build {
             }
         }
 
-        genIndex = 0;
+        if (!this.useScreenObjectStructs) {
+            genIndex = 0;
 
-        const widgets =
-            this.lvglObjectsAccessibleFromSourceCode.fromPage.filter(
-                widget =>
-                    !this.lvglObjectIdentifiers.fromPage.widgetToIdentifier.get(
-                        widget
-                    )
+            const widgets =
+                this.lvglObjectsAccessibleFromSourceCode.fromPage.filter(
+                    widget =>
+                        !this.lvglObjectIdentifiers.fromPage.widgetToIdentifier.get(
+                            widget
+                        )
+                );
+
+            addPageIdentifiers(
+                widgets,
+                this.lvglObjectIdentifiers.fromPage,
+                "",
+                false
             );
-
-        addPageIdentifiers(
-            widgets,
-            this.lvglObjectIdentifiers.fromPage,
-            "",
-            false
-        );
+        }
     }
 
     isAccessibleFromSourceCode(widget: LVGLWidget) {
@@ -428,6 +657,25 @@ export class LVGLBuild extends Build {
 
     get isV9() {
         return this.project.settings.general.lvglVersion.startsWith("9.");
+    }
+
+    get useScreenObjectStructs() {
+        return !!this.project.settings.build.screenObjectStructs;
+    }
+
+    isObjectStructWidget(widget: LVGLWidget) {
+        return widget.children.length > 0;
+    }
+
+    getParentLvglWidget(widget: LVGLWidget) {
+        const parentChildren = getParent(widget);
+        const parentWidget = parentChildren
+            ? getParent(parentChildren as any)
+            : undefined;
+
+        return parentWidget instanceof ProjectEditor.LVGLWidgetClass
+            ? parentWidget
+            : undefined;
     }
 
     isLVGLVersion(prefixes: string[]): boolean {
@@ -1366,13 +1614,64 @@ export class LVGLBuild extends Build {
         build.line("");
 
         // objects
-        build.blockStart(`typedef struct _objects_t {`);
+        if (this.useScreenObjectStructs) {
+            const buildObjectStructNodeDecl = (node: ObjectStructNode) => {
+                for (const field of node.fields) {
+                    if (field.childNode) {
+                        buildObjectStructNodeDecl(field.childNode);
+                    }
+                }
 
-        this.lvglObjectIdentifiers.fromPage.identifiers.forEach(
-            (identifier, i) => {
-                build.line(`lv_obj_t *${identifier};`);
+                build.blockStart(`typedef struct _${node.typeIdentifier}_t {`);
+
+                for (const field of node.fields) {
+                    if (field.childNode) {
+                        build.line(
+                            `${field.childNode.typeIdentifier}_t ${field.identifier};`
+                        );
+                    } else {
+                        build.line(`lv_obj_t *${field.identifier};`);
+                    }
+                }
+
+                build.blockEnd(`} ${node.typeIdentifier}_t;`);
+                build.line("");
+            };
+
+            for (const page of pages) {
+                const rootNode =
+                    this.lvglObjectIdentifiers.fromPage.objectStructRoots.get(
+                        page
+                    );
+
+                if (rootNode) {
+                    buildObjectStructNodeDecl(rootNode);
+                }
             }
-        );
+
+            build.blockStart(`typedef struct _objects_t {`);
+
+            for (const page of pages) {
+                const rootNode =
+                    this.lvglObjectIdentifiers.fromPage.objectStructRoots.get(
+                        page
+                    );
+
+                if (rootNode) {
+                    build.line(
+                        `${rootNode.typeIdentifier}_t ${rootNode.memberIdentifier};`
+                    );
+                }
+            }
+        } else {
+            build.blockStart(`typedef struct _objects_t {`);
+
+            this.lvglObjectIdentifiers.fromPage.identifiers.forEach(
+                identifier => {
+                    build.line(`lv_obj_t *${identifier};`);
+                }
+            );
+        }
 
         build.blockEnd(`} objects_t;`);
         build.line("");
@@ -2534,14 +2833,15 @@ export class LVGLBuild extends Build {
         build.pages
             .filter(page => !page.isUsedAsUserWidget)
             .forEach(page => {
-                const screenIdentifier =
-                    "objects." + this.getScreenIdentifier(page);
+                const screenAccessor = this.getLvglObjectAccessor(
+                    page.lvglScreenWidget!
+                );
                 if (this.project.settings.build.screensLifetimeSupport) {
                     build.line(
-                        `if (${screenIdentifier}) lv_obj_invalidate(${screenIdentifier});`
+                        `if (${screenAccessor}) lv_obj_invalidate(${screenAccessor});`
                     );
                 } else {
-                    build.line(`lv_obj_invalidate(${screenIdentifier});`);
+                    build.line(`lv_obj_invalidate(${screenAccessor});`);
                 }
             });
 

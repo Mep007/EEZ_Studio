@@ -53,12 +53,15 @@ import {
 
 import {
     LVGLVersion,
+    NamingConvention,
     PROJECT_TYPE_NAMES,
-    ProjectType
+    ProjectType,
+    getName
 } from "project-editor/project/project";
 import { ButtonAction } from "eez-studio-ui/action";
 import type { CommandsProtocolType } from "eez-studio-shared/extensions/extension";
 import { compareVersions } from "eez-studio-shared/util";
+import { getComponentName } from "project-editor/flow/components/components-registry";
 
 // from https://envox.eu/gitea
 interface TemplateProject {
@@ -126,6 +129,62 @@ interface IProjectType {
 
     author?: string;
     authorLink?: string;
+}
+
+function getLvglPageIdentifierPrefix(pageName: string) {
+    const pageIdentifier = getName(
+        "",
+        pageName,
+        NamingConvention.UnderscoreLowerCase
+    );
+
+    return `${pageIdentifier
+        .substring(0, 1)
+        .toUpperCase()}${pageIdentifier.substring(1)}`;
+}
+
+function getLvglWidgetTypeIdentifier(widgetType: string) {
+    return getName(
+        "",
+        getComponentName(widgetType),
+        NamingConvention.UnderscoreLowerCase
+    );
+}
+
+function assignMissingLvglWidgetIdentifiers(projectTemplate: any) {
+    const pages = [
+        ...(projectTemplate.pages ?? []),
+        ...(projectTemplate.userPages ?? []),
+        ...(projectTemplate.userWidgets ?? [])
+    ];
+
+    for (const page of pages) {
+        const pageIdentifier = getLvglPageIdentifierPrefix(page.name);
+        const counters = new Map<string, number>();
+
+        const assignWidgetIdentifiers = (widgets: any[] | undefined) => {
+            for (const widget of widgets ?? []) {
+                if (widget.type == "LVGLScreenWidget") {
+                    assignWidgetIdentifiers(widget.children);
+                    continue;
+                }
+
+                if (widget.type?.startsWith("LVGL") && !widget.identifier) {
+                    const widgetIdentifier = getLvglWidgetTypeIdentifier(
+                        widget.type
+                    );
+                    const key = `${pageIdentifier}_${widgetIdentifier}`;
+                    const count = (counters.get(key) ?? 0) + 1;
+                    counters.set(key, count);
+                    widget.identifier = `${key}_${count}`;
+                }
+
+                assignWidgetIdentifiers(widget.children);
+            }
+        };
+
+        assignWidgetIdentifiers(page.components);
+    }
 }
 
 // Base URL for eez-project-templates on GitHub
@@ -1668,6 +1727,7 @@ export class WizardModel {
                     ) {
                         projectTemplate.settings.general.lvglVersion =
                             this.lvglVersion;
+                        assignMissingLvglWidgetIdentifiers(projectTemplate);
                     } else if (this.type == "IEXT") {
                         projectTemplate.settings.general.commandsProtocol =
                             this.commandsProtocol;

@@ -1,4 +1,5 @@
 import React from "react";
+import { clipboard } from "electron";
 import { observable, makeObservable, runInAction, computed, toJS } from "mobx";
 import { observer } from "mobx-react";
 import { MenuItem } from "@electron/remote";
@@ -17,7 +18,8 @@ import {
     IEezObject,
     MessageType,
     getClassInfoLvglProperties,
-    IMessage
+    IMessage,
+    getParent
 } from "project-editor/core/object";
 
 import {
@@ -118,6 +120,72 @@ export const statesGroup: IPropertyGridGroupDefinition = {
     title: "States",
     position: 4
 };
+
+////////////////////////////////////////////////////////////////////////////////
+
+function getParentLvglWidget(widget: LVGLWidget) {
+    const parentChildren = getParent(widget);
+    const parentWidget = parentChildren
+        ? getParent(parentChildren as any)
+        : undefined;
+
+    return parentWidget instanceof ProjectEditor.LVGLWidgetClass
+        ? parentWidget
+        : undefined;
+}
+
+function getLvglCodeIdentifier(identifier: string) {
+    return getName("", identifier, NamingConvention.UnderscoreLowerCase);
+}
+
+function getLvglGeneratedObjectPath(widget: LVGLWidget) {
+    const page = ProjectEditor.getPage(widget) as Page;
+    const screenIdentifier = getLvglCodeIdentifier(page.name);
+    const project = getProjectStore(widget).project;
+
+    if (widget instanceof ProjectEditor.LVGLScreenWidgetClass) {
+        return project.settings.build.screenObjectStructs
+            ? `objects.${screenIdentifier}.${screenIdentifier}`
+            : `objects.${screenIdentifier}`;
+    }
+
+    if (!widget.identifier) {
+        return undefined;
+    }
+
+    const widgetIdentifier = getLvglCodeIdentifier(widget.identifier);
+
+    if (!project.settings.build.screenObjectStructs) {
+        return `objects.${widgetIdentifier}`;
+    }
+
+    const pathSegments: string[] = [];
+    const parentWidgets: LVGLWidget[] = [];
+    let parentWidget = getParentLvglWidget(widget);
+
+    while (parentWidget) {
+        if (parentWidget instanceof ProjectEditor.LVGLScreenWidgetClass) {
+            break;
+        }
+
+        parentWidgets.push(parentWidget);
+        parentWidget = getParentLvglWidget(parentWidget);
+    }
+
+    parentWidgets.reverse();
+
+    for (const parentWidget of parentWidgets) {
+        if (parentWidget.children.length > 0 && parentWidget.identifier) {
+            pathSegments.push(getLvglCodeIdentifier(parentWidget.identifier));
+        }
+    }
+
+    pathSegments.push(widgetIdentifier);
+
+    const objectPath = `objects.${screenIdentifier}.${pathSegments.join(".")}`;
+
+    return widget.children.length > 0 ? `${objectPath}.obj` : objectPath;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -604,13 +672,21 @@ export class LVGLWidget extends Widget {
             return undefined;
         }
 
-        const codeIdentifier = getName("", this.identifier, NamingConvention.UnderscoreLowerCase);
+        const codeIdentifier = getName(
+            "",
+            this.identifier,
+            NamingConvention.UnderscoreLowerCase
+        );
 
         if (codeIdentifier == this.identifier) {
             return undefined;
         }
 
         return codeIdentifier;
+    }
+
+    get generatedObjectPath() {
+        return getLvglGeneratedObjectPath(this);
     }
 
     static classInfo = makeDerivedClassInfo(Widget.classInfo, {
@@ -624,6 +700,36 @@ export class LVGLWidget extends Widget {
             }
 
             return name;
+        },
+
+        extendContextMenu: (
+            widget: LVGLWidget,
+            context,
+            objects,
+            menuItems
+        ) => {
+            const generatedObjectPath = getLvglGeneratedObjectPath(widget);
+
+            if (!generatedObjectPath) {
+                return;
+            }
+
+            if (menuItems.length > 0) {
+                menuItems.push(
+                    new MenuItem({
+                        type: "separator"
+                    })
+                );
+            }
+
+            menuItems.push(
+                new MenuItem({
+                    label: "Copy generated object path",
+                    click: () => {
+                        clipboard.writeText(generatedObjectPath);
+                    }
+                })
+            );
         },
 
         properties: [
@@ -642,6 +748,16 @@ export class LVGLWidget extends Widget {
                 computed: true,
                 formText: `This identifier will be used in the generated source code in the "Objects" struct. It is different from the "Name" above because in the source code we are following "lowercase with underscore" naming convention.`,
                 disabled: (object: LVGLWidget) => object.codeIdentifier == undefined
+            },
+            {
+                name: "generatedObjectPath",
+                displayName: "Generated object path",
+                type: PropertyType.String,
+                propertyGridGroup: generalGroup,
+                computed: true,
+                readOnlyInPropertyGrid: true,
+                hideInPropertyGrid: (widget: LVGLWidget) =>
+                    !widget.generatedObjectPath
             },
             {
                 name: "left",
@@ -1263,9 +1379,67 @@ export class LVGLWidget extends Widget {
                 const lvglIdentifier = projectStore.lvglIdentifiers.getIdentifier(widget);
 
                 if (lvglIdentifier && lvglIdentifier.widgets.length > 1) {
-                    messages.push(
-                        new Message(MessageType.ERROR, `Duplicate identifier`, getChildOfObject(widget, "identifier"))
-                    );
+                    const getParentLvglWidget = (widget: LVGLWidget) => {
+                        const parentChildren = getParent(widget);
+                        const parentWidget = parentChildren
+                            ? getParent(parentChildren as any)
+                            : undefined;
+
+                        return parentWidget instanceof ProjectEditor.LVGLWidgetClass
+                            ? parentWidget
+                            : undefined;
+                    };
+
+                    const isObjectStructWidget = (widget: LVGLWidget) =>
+                        widget.children.length > 0;
+
+                    const getLvglObjectStructParent = (widget: LVGLWidget) => {
+                        let parentWidget = getParentLvglWidget(widget);
+
+                        while (parentWidget) {
+                            if (
+                                isObjectStructWidget(parentWidget) &&
+                                parentWidget.identifier
+                            ) {
+                                return parentWidget;
+                            }
+
+                            if (
+                                parentWidget instanceof
+                                ProjectEditor.LVGLScreenWidgetClass
+                            ) {
+                                return undefined;
+                            }
+
+                            parentWidget = getParentLvglWidget(parentWidget);
+                        }
+
+                        return undefined;
+                    };
+
+                    const getLvglObjectIdentifierScope = (widget: LVGLWidget) =>
+                        getLvglObjectStructParent(widget) ??
+                        ProjectEditor.getPage(widget).lvglScreenWidget;
+
+                    const duplicateWidgets = projectStore.project.settings.build
+                        .screenObjectStructs
+                        ? lvglIdentifier.widgets.filter(
+                              duplicateWidget =>
+                                  getLvglObjectIdentifierScope(
+                                      duplicateWidget
+                                  ) == getLvglObjectIdentifierScope(widget)
+                          )
+                        : lvglIdentifier.widgets;
+
+                    if (duplicateWidgets.length > 1) {
+                        messages.push(
+                            new Message(
+                                MessageType.ERROR,
+                                `Duplicate identifier`,
+                                getChildOfObject(widget, "identifier")
+                            )
+                        );
+                    }
                 }
             }
 

@@ -277,6 +277,7 @@ export class Build extends EezObject {
     separateFolderForImagesAndFonts?: boolean;
     lvglInclude: string;
     screensLifetimeSupport: boolean;
+    screenObjectStructs: boolean;
     generateSourceCodeForEezFramework: boolean;
     compressFlowDefinition: boolean;
     executionQueueSize: number;
@@ -369,6 +370,13 @@ export class Build extends EezObject {
                 disabled: isNotLVGLProject
             },
             {
+                name: "screenObjectStructs",
+                displayName: "Nested object structs (experimental)",
+                checkboxStyleSwitch: true,
+                type: PropertyType.Boolean,
+                disabled: isNotLVGLProject
+            },
+            {
                 name: "useDockerDesktop",
                 displayName: "Use Docker Desktop for full simulator",
                 checkboxStyleSwitch: true,
@@ -441,6 +449,10 @@ export class Build extends EezObject {
                 jsObject.screensLifetimeSupport = false;
             }
 
+            if (jsObject.screenObjectStructs == undefined) {
+                jsObject.screenObjectStructs = false;
+            }
+
             if (jsObject.useDockerDesktop == undefined) {
                 jsObject.useDockerDesktop = true;
             }
@@ -480,6 +492,7 @@ export class Build extends EezObject {
             fileSystemPath: observable,
             lvglInclude: observable,
             screensLifetimeSupport: observable,
+            screenObjectStructs: observable,
             useDockerDesktop: observable,
             generateSourceCodeForEezFramework: observable,
             compressFlowDefinition: observable,

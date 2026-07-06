@@ -27,6 +27,11 @@ import { visitObjects } from "project-editor/core/search";
 import { ProjectEditor } from "project-editor/project-editor-interface";
 import type { LVGLWidget } from "project-editor/lvgl/widgets";
 import type { Style } from "project-editor/features/style/style";
+import { getComponentName } from "project-editor/flow/components/components-registry";
+import {
+    getName,
+    NamingConvention
+} from "project-editor/project/assets";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -435,6 +440,114 @@ function ensureUniqueProperties(
     parentObject: IEezObject,
     objects: IEezObject[]
 ) {
+    function getLvglPageIdentifierPrefix(pageName: string) {
+        const pageIdentifier = getName(
+            "",
+            pageName,
+            NamingConvention.UnderscoreLowerCase
+        );
+
+        return `${pageIdentifier
+            .substring(0, 1)
+            .toUpperCase()}${pageIdentifier.substring(1)}`;
+    }
+
+    function getLvglWidgetTypeIdentifier(widget: LVGLWidget) {
+        return getName(
+            "",
+            getComponentName(widget.type),
+            NamingConvention.UnderscoreLowerCase
+        );
+    }
+
+    function isLvglObjectStructWidget(widget: LVGLWidget) {
+        return widget.children.length > 0;
+    }
+
+    function getParentLvglWidget(widget: LVGLWidget) {
+        const parentChildren = getParent(widget);
+        const parentWidget = parentChildren
+            ? getParent(parentChildren as any)
+            : undefined;
+
+        return parentWidget instanceof ProjectEditor.LVGLWidgetClass
+            ? parentWidget
+            : undefined;
+    }
+
+    function getLvglObjectStructParent(widget: LVGLWidget) {
+        let parentWidget = getParentLvglWidget(widget);
+
+        while (parentWidget) {
+            if (
+                isLvglObjectStructWidget(parentWidget) &&
+                parentWidget.identifier
+            ) {
+                return parentWidget;
+            }
+
+            if (parentWidget instanceof ProjectEditor.LVGLScreenWidgetClass) {
+                return undefined;
+            }
+
+            parentWidget = getParentLvglWidget(parentWidget);
+        }
+
+        return undefined;
+    }
+
+    function getLvglObjectIdentifierScope(widget: LVGLWidget) {
+        if (!project.settings.build.screenObjectStructs) {
+            return undefined;
+        }
+
+        return (
+            getLvglObjectStructParent(widget) ??
+            ProjectEditor.getPage(widget).lvglScreenWidget
+        );
+    }
+
+    function getDefaultLvglWidgetIdentifier(widget: LVGLWidget) {
+        if (
+            project.settings.build.screenObjectStructs &&
+            getLvglObjectStructParent(widget)
+        ) {
+            return getLvglWidgetTypeIdentifier(widget);
+        }
+
+        const page = ProjectEditor.getPage(widget);
+        return `${getLvglPageIdentifierPrefix(
+            page.name
+        )}_${getLvglWidgetTypeIdentifier(widget)}_1`;
+    }
+
+    function isGeneratedLvglWidgetIdentifier(
+        widget: LVGLWidget,
+        identifier: string
+    ) {
+        const widgetTypeIdentifier = getLvglWidgetTypeIdentifier(widget);
+
+        if (
+            project.settings.build.screenObjectStructs &&
+            getLvglObjectStructParent(widget) &&
+            (identifier == widgetTypeIdentifier ||
+                identifier.startsWith(`${widgetTypeIdentifier}_`))
+        ) {
+            const suffix = identifier.substring(widgetTypeIdentifier.length);
+            return suffix == "" || /^_\d+$/.test(suffix);
+        }
+
+        return project._store.lvglIdentifiers.pages.some(page => {
+            const prefix = `${getLvglPageIdentifierPrefix(
+                page.name
+            )}_${widgetTypeIdentifier}_`;
+            return (
+                identifier.startsWith(prefix) &&
+                /^\d+$/.test(identifier.substring(prefix.length))
+            );
+        });
+    }
+
     let existingObjects = (parentObject as IEezObject[]).map(
         (object: IEezObject) => object
     );
@@ -477,9 +590,38 @@ function ensureUniqueProperties(
             }
 
             newLvglWidgets.forEach(newLvglWidget => {
+                if (
+                    !(
+                        newLvglWidget instanceof
+                        ProjectEditor.LVGLScreenWidgetClass
+                    )
+                ) {
+                    if (
+                        !newLvglWidget.identifier ||
+                        isGeneratedLvglWidgetIdentifier(
+                            newLvglWidget,
+                            newLvglWidget.identifier
+                        )
+                    ) {
+                        newLvglWidget.identifier =
+                            getDefaultLvglWidgetIdentifier(newLvglWidget);
+                    }
+                }
+
                 if (newLvglWidget.identifier) {
+                    const existingLvglWidgetsInScope = project.settings.build
+                        .screenObjectStructs
+                        ? existingLvglWidgets.filter(
+                              existingLvglWidget =>
+                                  getLvglObjectIdentifierScope(
+                                      existingLvglWidget
+                                  ) ==
+                                  getLvglObjectIdentifierScope(newLvglWidget)
+                          )
+                        : existingLvglWidgets;
+
                     newLvglWidget.identifier = getUniquePropertyValue(
-                        existingLvglWidgets,
+                        existingLvglWidgetsInScope,
                         "identifier",
                         newLvglWidget.identifier
                     ) as string;
