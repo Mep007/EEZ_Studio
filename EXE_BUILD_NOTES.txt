@@ -1,0 +1,158 @@
+EEZ Studio MEP fork - Windows EXE build notes
+Date: 2026-07-07
+Branch: mesp-lvgl-codegen
+
+Goal
+----
+Create a Windows NSIS installer / EXE build for the local MEP fork.
+
+Final artifact
+--------------
+Created installer:
+
+    dist\EEZ Studio Setup 0.28.0.exe
+
+Final SHA256:
+
+    1D440C5F56879DE2314B97EFBD410272AA31E0E52B5CC910F4935BAD020CC7E3
+
+The installer was created successfully, but it is not digitally signed.
+
+
+Important environment notes
+---------------------------
+The system Node installation was:
+
+    Node v26.4.0
+
+That did not work for this build. Native dependencies, especially
+better-sqlite3, did not have prebuilt binaries for Node 26 and then failed
+during node-gyp compilation.
+
+A portable Node 22 was downloaded and used only for this build:
+
+    C:\Users\mervart\.codex\tools\node-v22.23.1-win-x64
+
+Commands were run with this Node first on PATH:
+
+    $nodeRoot = Join-Path $env:USERPROFILE ".codex\tools\node-v22.23.1-win-x64"
+    $env:PATH = "$nodeRoot;$env:PATH"
+
+PowerShell could not run npm.ps1 because script execution is disabled, so
+npm.cmd was used.
+
+Also, ELECTRON_RUN_AS_NODE had to be cleared before Electron/electron-builder
+steps:
+
+    Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+
+
+Visual Studio / node-gyp issue
+------------------------------
+Visual Studio Build Tools 18 / "Visual Studio 2026" was installed here:
+
+    C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools
+
+The repo dependency @electron/node-gyp@10.2.0-electron.1 did not recognize
+Visual Studio major version 18. It only mapped versions 15, 16 and 17 to
+VS2017, VS2019 and VS2022.
+
+To build native dependencies with the installed VS18 toolchain, the local file
+inside node_modules was patched:
+
+    node_modules\@electron\node-gyp\lib\find-visualstudio.js
+
+Patch 1: map Visual Studio major version 18 to versionYear 2022 so node-gyp
+accepts the installation.
+
+Patch 2: return platform toolset v145 for version 18.x. Without this, MSBuild
+tried to use v143 and failed with:
+
+    error MSB8020: The build tools for Visual Studio 2022 (Platform Toolset = v143) cannot be found.
+
+This node_modules patch is only a local build-machine workaround. It is not a
+source change to the fork.
+
+
+Dependency installation sequence that worked
+--------------------------------------------
+First install the npm tree without lifecycle scripts, so node_modules exists
+and @electron/node-gyp can be patched:
+
+    npm.cmd ci --include=dev --bin-links=true --ignore-scripts
+
+Then patch node_modules\@electron\node-gyp\lib\find-visualstudio.js as described
+above.
+
+Then rebuild native modules from a Visual Studio Developer Command Prompt
+environment:
+
+    cmd.exe /d /s /c "call \"C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\Tools\VsDevCmd.bat\" -arch=amd64 -host_arch=amd64 && set \"PATH=C:\Users\mervart\.codex\tools\node-v22.23.1-win-x64;%PATH%\" && set \"ELECTRON_RUN_AS_NODE=\" && npm.cmd rebuild --foreground-scripts"
+
+This ran the skipped install/postinstall scripts and successfully rebuilt
+native dependencies including:
+
+    lz4
+    better-sqlite3
+    usb
+    serialport bindings
+    electron-rebuild
+
+
+Production build
+----------------
+After dependencies were installed and rebuilt, the normal production build
+worked with portable Node 22:
+
+    npm.cmd run build
+
+This completed:
+
+    tsc
+    gulp release
+    CSS builds
+    wasm copy
+    lv_img_conv_v9 copy
+    electron-builder.yml generation
+
+
+Installer build
+---------------
+Plain npm run dist initially failed while electron-builder tried to unpack
+winCodeSign-2.6.0.7z:
+
+    ERROR: Cannot create symbolic link ... libcrypto.dylib
+    ERROR: Cannot create symbolic link ... libssl.dylib
+
+This is a Windows symlink privilege problem in the electron-builder cache.
+
+The successful final build command disabled publish and skipped executable
+sign/resource editing:
+
+    $env:CSC_IDENTITY_AUTO_DISCOVERY = "false"
+    $env:CI = "false"
+    .\node_modules\.bin\electron-builder.cmd --config electron-builder.yml --config.win.signAndEditExecutable=false --publish never
+
+This produced:
+
+    dist\EEZ Studio Setup 0.28.0.exe
+
+
+Known consequences
+------------------
+The produced installer is usable as an unsigned local/test build, but
+Get-AuthenticodeSignature reports:
+
+    NotSigned
+
+Because signAndEditExecutable was disabled to avoid the winCodeSign symlink
+problem, Windows executable resource/signing behavior may differ from an
+official signed release build.
+
+For a fully signed/release-like build, either run in a Windows environment with
+symlink privileges enabled or run the terminal elevated / with Developer Mode
+configured so electron-builder can unpack winCodeSign normally, then build
+without:
+
+    --config.win.signAndEditExecutable=false
+
