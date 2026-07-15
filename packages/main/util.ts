@@ -1,6 +1,7 @@
 import os from "os";
 import path from "path";
 
+import { MEP_FORK_APP_NAME } from "eez-studio-shared/mep-fork";
 import { sourceRootDir } from "eez-studio-shared/util";
 
 export function getIcon() {
@@ -13,4 +14,4 @@ export function getIcon() {
     }
 }
 
-export const APP_NAME = "MEP FORK - EEZ Studio";
+export const APP_NAME = MEP_FORK_APP_NAME;

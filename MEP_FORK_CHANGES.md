@@ -1,5 +1,74 @@
 # MEP Fork Changes
 
+Current fork release: `MEP FORK v1.0.2`
+
+The release is shown in the application title as:
+
+```text
+MEP FORK v1.0.2 - EEZ Studio
+```
+
+The fork version is defined once in:
+
+```text
+packages/eez-studio-shared/mep-fork.ts
+```
+
+## v1.0.2 - Hierarchical Screen Runtime
+
+This release makes generated LVGL screen handling safe for hierarchical object
+structs and multi-screen projects.
+
+### Screen Descriptors
+
+- Generates an explicit descriptor table for screen IDs, root pointers, create
+  functions and tick functions.
+- Removes screen lookup through the unsafe
+  `((lv_obj_t **)&objects)[index]` pattern.
+- Removes `screenId - 1` indexing from generated screen create, delete and tick
+  paths.
+- Adds `SCREEN_ID_NONE`, `SCREEN_ID_COUNT` and `UI_SCREEN_COUNT`.
+
+### Screen Runtime API
+
+- Adds validated `ui_screen_get_root()` and `ui_screen_is_valid()` helpers.
+- Tracks requested, loading and active screen IDs independently.
+- Adds idempotent `ui_screens_init()` and active-screen `ui_screens_tick()`.
+- Adds lifecycle callbacks for load start, loaded, unload start and unloaded.
+- Adds an optional user tick callback that is never called with
+  `SCREEN_ID_NONE`.
+
+### Animated Screen Loading
+
+- Adds `ui_load_screen_anim()` with animation type, duration and delay.
+- Keeps `ui_load_screen()` as a default fade-in wrapper using 200 ms.
+- Keeps `loadScreen()` and `loadScreenAnim()` compatibility wrappers.
+- Keeps LVGL `auto_delete` fixed to `false` because generated screen pointers
+  remain stored in `objects`.
+- Generates the correct API names and animation types for LVGL 8 and LVGL 9.
+
+### Theme Runtime API
+
+- Adds `ui_theme_set()`, `ui_theme_get()` and `ui_theme_get_color()` for
+  non-Flow LVGL projects.
+- Allows selecting a theme before generated screen initialization.
+- Keeps `change_color_theme()` as a compatibility wrapper.
+
+### Validation
+
+- TypeScript compilation passed.
+- Gulp release build passed.
+- DC502 headless EEZ export completed without project errors or warnings.
+- Generated `screens.c` and `ui.c` passed ARM GCC syntax validation.
+
+Detailed implementation and migration notes are available in:
+
+```text
+handover_eez_screen_runtime_codegen.md
+```
+
+## Existing Nested Object Feature
+
 This fork adds an experimental LVGL code generation mode for projects that use
 many repeated UI blocks, such as dashboard tiles.
 
@@ -62,8 +131,8 @@ objects.main.panel_1.tile_1.button.label
 - Screen invalidation uses the correct nested root screen pointer.
 - LVGL widget context menu has `Copy generated object path`.
 - Properties > General shows a read-only `Generated object path`.
-- App title includes `MEP FORK - EEZ Studio` to make the fork visible while
-  testing.
+- App title includes the current `MEP FORK` release to make the fork and its
+  generated-code compatibility level visible while testing.
 - `run-eez-studio-dev.bat` starts the local Electron build from the repo root.
 
 ## Default Behavior

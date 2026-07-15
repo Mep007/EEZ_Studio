@@ -17,6 +17,7 @@ import * as path from "path";
 import { dockerBuildState } from "project-editor/lvgl/docker-build/docker-build-state";
 
 import { onSimpleMessage } from "eez-studio-shared/util-renderer";
+import { MEP_FORK_APP_NAME } from "eez-studio-shared/mep-fork";
 
 import {
     loadPreinstalledExtension,
@@ -1136,9 +1137,9 @@ export class Tabs {
                 if (this.activeTab) {
                     title = `${this.activeTab.modified ? MODIFED_MARK : ""}${
                         this.activeTab.titleStr
-                    } - MEP FORK - EEZ Studio`;
+                    } - ${MEP_FORK_APP_NAME}`;
                 } else {
-                    title = `MEP FORK - EEZ Studio`;
+                    title = MEP_FORK_APP_NAME;
                 }
 
                 document.title = title;

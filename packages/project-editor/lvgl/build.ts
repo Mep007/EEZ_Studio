@@ -1599,18 +1599,86 @@ export class LVGLBuild extends Build {
         build.line("");
         build.line("// Screens");
         build.line("");
+        build.line("#include <stdbool.h>");
+        build.line("#include <stdint.h>");
+        build.line("");
 
         // enum ScreensEnum
         build.blockStart(`enum ScreensEnum {`);
         const pages = this.pages.filter(page => !page.isUsedAsUserWidget);
+        build.line(`SCREEN_ID_NONE = 0,`);
         build.line(`_SCREEN_ID_FIRST = 1,`);
         for (let i = 0; i < pages.length; i++) {
             build.line(
                 `SCREEN_ID_${this.getScreenIdentifier(pages[i]).toUpperCase()} = ${i + 1},`
             );
         }
-        build.line(`_SCREEN_ID_LAST = ${pages.length}`);
+        build.line(`_SCREEN_ID_LAST = ${pages.length},`);
+        build.line(`SCREEN_ID_COUNT = ${pages.length + 1}`);
         build.blockEnd(`};`);
+        build.line("");
+        build.line(`#define UI_SCREEN_COUNT ${pages.length}U`);
+        build.line("");
+
+        build.blockStart("typedef enum {");
+        build.line("UI_SCREEN_EVENT_LOAD_START,");
+        build.line("UI_SCREEN_EVENT_LOADED,");
+        build.line("UI_SCREEN_EVENT_UNLOAD_START,");
+        build.line("UI_SCREEN_EVENT_UNLOADED");
+        build.blockEnd("} ui_screen_event_t;");
+        build.line("");
+        build.line(
+            "typedef void (*ui_screen_event_cb_t)(enum ScreensEnum screen_id, ui_screen_event_t event, void *user_data);"
+        );
+        build.line(
+            "typedef void (*ui_screen_tick_cb_t)(enum ScreensEnum screen_id, void *user_data);"
+        );
+        build.line("");
+
+        build.blockStart("typedef struct {");
+        build.line("enum ScreensEnum id;");
+        build.line("lv_obj_t **root;");
+        build.line("void (*create)(void);");
+        build.line("void (*tick)(void);");
+        build.blockEnd("} ui_screen_descriptor_t;");
+        build.line("");
+
+        build.line("bool ui_screen_is_valid(enum ScreensEnum screen_id);");
+        build.line("lv_obj_t *ui_screen_get_root(enum ScreensEnum screen_id);");
+        build.line("enum ScreensEnum ui_screen_get_requested(void);");
+        build.line("enum ScreensEnum ui_screen_get_loading(void);");
+        build.line("enum ScreensEnum ui_screen_get_active(void);");
+        build.line("bool ui_load_screen_anim(");
+        build.line("    enum ScreensEnum screen_id,");
+        if (this.isV9) {
+            build.line("    lv_screen_load_anim_t animation,");
+        } else {
+            build.line("    lv_scr_load_anim_t animation,");
+        }
+        build.line("    uint32_t duration,");
+        build.line("    uint32_t delay");
+        build.line(");");
+        build.line("bool ui_load_screen(enum ScreensEnum screen_id);");
+        build.line("void loadScreen(enum ScreensEnum screen_id);");
+        build.line("void loadScreenAnim(");
+        build.line("    enum ScreensEnum screen_id,");
+        if (this.isV9) {
+            build.line("    lv_screen_load_anim_t animation,");
+        } else {
+            build.line("    lv_scr_load_anim_t animation,");
+        }
+        build.line("    uint32_t duration,");
+        build.line("    uint32_t delay");
+        build.line(");");
+        build.line("bool ui_is_initialized(void);");
+        build.line("void ui_screens_init(void);");
+        build.line("void ui_screens_tick(void);");
+        build.line(
+            "void ui_set_screen_event_callback(ui_screen_event_cb_t callback, void *user_data);"
+        );
+        build.line(
+            "void ui_set_screen_tick_callback(ui_screen_tick_cb_t callback, void *user_data);"
+        );
         build.line("");
 
         // objects
@@ -1789,12 +1857,17 @@ export class LVGLBuild extends Build {
                 );
             });
             build.blockEnd(`};`);
+            build.line(`#define UI_THEME_COUNT ${this.project.themes.length}U`);
+            build.line(`#define UI_COLOR_COUNT ${this.project.colors.length}U`);
             build.line("void change_color_theme(uint32_t themeIndex);");
             build.line(
                 `extern uint32_t theme_colors[${this.project.themes.length}][${this.project.colors.length}];`
             );
             if (!this.assets.projectStore.projectTypeTraits.hasFlowSupport) {
                 build.line(`extern uint32_t active_theme_index;`);
+                build.line("bool ui_theme_set(enum Themes theme);");
+                build.line("enum Themes ui_theme_get(void);");
+                build.line("lv_color_t ui_theme_get_color(enum Colors color);");
             }
         }
 
@@ -1844,16 +1917,274 @@ export class LVGLBuild extends Build {
     async buildScreensDef() {
         this.startBuild();
         const build = this;
+        const pages = this.pages.filter(page => !page.isUsedAsUserWidget);
 
         build.line(`#include <string.h>`);
+        build.line(`#include <stdint.h>`);
         build.line("");
 
         build.line(`objects_t objects;`);
 
         build.line("");
 
+        if (pages.length > 0) {
+            build.blockStart(
+                "static const ui_screen_descriptor_t screen_descriptors[] = {"
+            );
+            for (const page of pages) {
+                build.line(
+                    `{ SCREEN_ID_${this.getScreenIdentifier(page).toUpperCase()}, &${this.getLvglObjectAccessor(
+                        page.lvglScreenWidget!
+                    )}, ${this.getScreenCreateFunctionName(page)}, ${this.getScreenTickFunctionName(page)} },`
+                );
+            }
+            build.blockEnd("};");
+            build.line("");
+        }
+
+        build.line("static bool ui_initialized = false;");
+        build.line(
+            "static enum ScreensEnum requested_screen = SCREEN_ID_NONE;"
+        );
+        build.line("static enum ScreensEnum loading_screen = SCREEN_ID_NONE;");
+        build.line("static enum ScreensEnum active_screen = SCREEN_ID_NONE;");
+        build.line("static ui_screen_event_cb_t screen_event_callback;");
+        build.line("static void *screen_event_user_data;");
+        build.line("static ui_screen_tick_cb_t screen_tick_callback;");
+        build.line("static void *screen_tick_user_data;");
+        build.line("");
+
+        build.blockStart(
+            "static const ui_screen_descriptor_t *ui_screen_find(enum ScreensEnum screen_id) {"
+        );
+        if (pages.length > 0) {
+            build.blockStart(
+                "for (uint32_t i = 0; i < UI_SCREEN_COUNT; i++) {"
+            );
+            build.blockStart("if (screen_descriptors[i].id == screen_id) {");
+            build.line("return &screen_descriptors[i];");
+            build.blockEnd("}");
+            build.blockEnd("}");
+        } else {
+            build.line("(void)screen_id;");
+        }
+        build.line("return NULL;");
+        build.blockEnd("}");
+        build.line("");
+
+        build.blockStart(
+            "static void ui_screen_event_handler(lv_event_t *event) {"
+        );
+        build.line(
+            "enum ScreensEnum screen_id = (enum ScreensEnum)(uintptr_t)lv_event_get_user_data(event);"
+        );
+        build.line("ui_screen_event_t ui_event;");
+        build.blockStart("switch (lv_event_get_code(event)) {");
+        build.line("case LV_EVENT_SCREEN_LOAD_START:");
+        build.indent();
+        build.line("loading_screen = screen_id;");
+        build.line("ui_event = UI_SCREEN_EVENT_LOAD_START;");
+        build.line("break;");
+        build.unindent();
+        build.line("case LV_EVENT_SCREEN_LOADED:");
+        build.indent();
+        build.line("active_screen = screen_id;");
+        build.line("loading_screen = SCREEN_ID_NONE;");
+        build.line("ui_event = UI_SCREEN_EVENT_LOADED;");
+        build.line("break;");
+        build.unindent();
+        build.line("case LV_EVENT_SCREEN_UNLOAD_START:");
+        build.indent();
+        build.line("ui_event = UI_SCREEN_EVENT_UNLOAD_START;");
+        build.line("break;");
+        build.unindent();
+        build.line("case LV_EVENT_SCREEN_UNLOADED:");
+        build.indent();
+        build.blockStart("if (active_screen == screen_id) {");
+        build.line("active_screen = SCREEN_ID_NONE;");
+        build.blockEnd("}");
+        build.line("ui_event = UI_SCREEN_EVENT_UNLOADED;");
+        build.line("break;");
+        build.unindent();
+        build.line("default:");
+        build.indent();
+        build.line("return;");
+        build.unindent();
+        build.blockEnd("}");
+        build.blockStart("if (screen_event_callback != NULL) {");
+        build.line(
+            "screen_event_callback(screen_id, ui_event, screen_event_user_data);"
+        );
+        build.blockEnd("}");
+        build.blockEnd("}");
+        build.line("");
+
+        build.blockStart(
+            "bool ui_screen_is_valid(enum ScreensEnum screen_id) {"
+        );
+        build.line("return ui_screen_find(screen_id) != NULL;");
+        build.blockEnd("}");
+        build.line("");
+
+        build.blockStart(
+            "lv_obj_t *ui_screen_get_root(enum ScreensEnum screen_id) {"
+        );
+        build.line(
+            "const ui_screen_descriptor_t *screen = ui_screen_find(screen_id);"
+        );
+        build.line(
+            "return screen != NULL && screen->root != NULL ? *screen->root : NULL;"
+        );
+        build.blockEnd("}");
+        build.line("");
+
+        build.blockStart("enum ScreensEnum ui_screen_get_requested(void) {");
+        build.line("return requested_screen;");
+        build.blockEnd("}");
+        build.blockStart("enum ScreensEnum ui_screen_get_loading(void) {");
+        build.line("return loading_screen;");
+        build.blockEnd("}");
+        build.blockStart("enum ScreensEnum ui_screen_get_active(void) {");
+        build.line("return active_screen;");
+        build.blockEnd("}");
+        build.line("");
+
+        build.blockStart(
+            "void ui_set_screen_event_callback(ui_screen_event_cb_t callback, void *user_data) {"
+        );
+        build.line("screen_event_callback = callback;");
+        build.line("screen_event_user_data = user_data;");
+        build.blockEnd("}");
+        build.line("");
+
+        build.blockStart(
+            "void ui_set_screen_tick_callback(ui_screen_tick_cb_t callback, void *user_data) {"
+        );
+        build.line("screen_tick_callback = callback;");
+        build.line("screen_tick_user_data = user_data;");
+        build.blockEnd("}");
+        build.line("");
+
+        if (this.isV9) {
+            build.blockStart(
+                "bool ui_load_screen_anim(enum ScreensEnum screen_id, lv_screen_load_anim_t animation, uint32_t duration, uint32_t delay) {"
+            );
+        } else {
+            build.blockStart(
+                "bool ui_load_screen_anim(enum ScreensEnum screen_id, lv_scr_load_anim_t animation, uint32_t duration, uint32_t delay) {"
+            );
+        }
+        build.line("lv_obj_t *screen = ui_screen_get_root(screen_id);");
+        build.blockStart("if (screen == NULL) {");
+        build.line("return false;");
+        build.blockEnd("}");
+        build.line("requested_screen = screen_id;");
+        if (this.isV9) {
+            build.blockStart("if (screen == lv_screen_active()) {");
+        } else {
+            build.blockStart("if (screen == lv_scr_act()) {");
+        }
+        build.line("loading_screen = SCREEN_ID_NONE;");
+        build.blockStart("if (active_screen != screen_id) {");
+        build.line("active_screen = screen_id;");
+        build.blockStart("if (screen_event_callback != NULL) {");
+        build.line(
+            "screen_event_callback(screen_id, UI_SCREEN_EVENT_LOADED, screen_event_user_data);"
+        );
+        build.blockEnd("}");
+        build.blockEnd("}");
+        build.line("return true;");
+        build.blockEnd("}");
+        if (this.isV9) {
+            build.line(
+                "lv_screen_load_anim(screen, animation, duration, delay, false);"
+            );
+        } else {
+            build.line(
+                "lv_scr_load_anim(screen, animation, duration, delay, false);"
+            );
+        }
+        build.line("return true;");
+        build.blockEnd("}");
+        build.line("");
+
+        build.blockStart("bool ui_load_screen(enum ScreensEnum screen_id) {");
+        if (this.isV9) {
+            build.line(
+                "return ui_load_screen_anim(screen_id, LV_SCREEN_LOAD_ANIM_FADE_IN, 200U, 0U);"
+            );
+        } else {
+            build.line(
+                "return ui_load_screen_anim(screen_id, LV_SCR_LOAD_ANIM_FADE_IN, 200U, 0U);"
+            );
+        }
+        build.blockEnd("}");
+        build.line("");
+
+        build.blockStart("void loadScreen(enum ScreensEnum screen_id) {");
+        build.line("(void)ui_load_screen(screen_id);");
+        build.blockEnd("}");
+        build.line("");
+
+        if (this.isV9) {
+            build.blockStart(
+                "void loadScreenAnim(enum ScreensEnum screen_id, lv_screen_load_anim_t animation, uint32_t duration, uint32_t delay) {"
+            );
+        } else {
+            build.blockStart(
+                "void loadScreenAnim(enum ScreensEnum screen_id, lv_scr_load_anim_t animation, uint32_t duration, uint32_t delay) {"
+            );
+        }
+        build.line(
+            "(void)ui_load_screen_anim(screen_id, animation, duration, delay);"
+        );
+        build.blockEnd("}");
+        build.line("");
+
+        build.blockStart("bool ui_is_initialized(void) {");
+        build.line("return ui_initialized;");
+        build.blockEnd("}");
+        build.line("");
+
+        build.blockStart("void ui_screens_init(void) {");
+        build.blockStart("if (ui_initialized) {");
+        build.line("return;");
+        build.blockEnd("}");
+        build.line("create_screens();");
+        if (pages.length > 0) {
+            build.blockStart(
+                "for (uint32_t i = 0; i < UI_SCREEN_COUNT; i++) {"
+            );
+            build.line("lv_obj_t *root = *screen_descriptors[i].root;");
+            build.blockStart("if (root != NULL) {");
+            build.line(
+                "lv_obj_add_event_cb(root, ui_screen_event_handler, LV_EVENT_ALL, (void *)(uintptr_t)screen_descriptors[i].id);"
+            );
+            build.blockEnd("}");
+            build.blockEnd("}");
+        }
+        build.line("ui_initialized = true;");
+        build.blockEnd("}");
+        build.line("");
+
+        build.blockStart("void ui_screens_tick(void) {");
+        build.line(
+            "const ui_screen_descriptor_t *screen = ui_screen_find(active_screen);"
+        );
+        build.blockStart("if (screen != NULL && screen->tick != NULL) {");
+        build.line("screen->tick();");
+        build.blockEnd("}");
+        build.blockStart(
+            "if (screen != NULL && screen_tick_callback != NULL) {"
+        );
+        build.line(
+            "screen_tick_callback(active_screen, screen_tick_user_data);"
+        );
+        build.blockEnd("}");
+        build.blockEnd("}");
+        build.line("");
+
         if (this.assets.projectStore.projectTypeTraits.hasFlowSupport) {
-            const pages = this.pages.filter(page => !page.isUsedAsUserWidget);
             if (pages.length > 0) {
                 build.line(
                     `static const char *screen_names[] = { ${pages.map(page => `"${page.name}"`).join(", ")} };`
@@ -2185,13 +2516,22 @@ export class LVGLBuild extends Build {
             build.blockEnd("};");
 
             build.blockStart("void create_screen(int screen_index) {");
+            build.blockStart(
+                `if (screen_index >= 0 && screen_index < ${this.userPages.length}) {`
+            );
             build.line("create_screen_funcs[screen_index]();");
+            build.blockEnd("}");
             build.blockEnd("}");
 
             build.blockStart(
                 "void create_screen_by_id(enum ScreensEnum screenId) {"
             );
-            build.line("create_screen_funcs[screenId - 1]();");
+            build.line(
+                "const ui_screen_descriptor_t *screen = ui_screen_find(screenId);"
+            );
+            build.blockStart("if (screen != NULL && screen->create != NULL) {");
+            build.line("screen->create();");
+            build.blockEnd("}");
             build.blockEnd("}");
 
             //
@@ -2206,13 +2546,24 @@ export class LVGLBuild extends Build {
             build.blockEnd("};");
 
             build.blockStart("void delete_screen(int screen_index) {");
+            build.blockStart(
+                `if (screen_index >= 0 && screen_index < ${this.userPages.length}) {`
+            );
             build.line("delete_screen_funcs[screen_index]();");
+            build.blockEnd("}");
             build.blockEnd("}");
 
             build.blockStart(
                 "void delete_screen_by_id(enum ScreensEnum screenId) {"
             );
-            build.line("delete_screen_funcs[screenId - 1]();");
+            build.line(
+                "const ui_screen_descriptor_t *screen = ui_screen_find(screenId);"
+            );
+            build.blockStart("if (screen != NULL) {");
+            build.line(
+                "delete_screen_funcs[(uint32_t)(screen - screen_descriptors)]();"
+            );
+            build.blockEnd("}");
             build.blockEnd("}");
         }
 
@@ -2234,7 +2585,12 @@ export class LVGLBuild extends Build {
         build.blockEnd("}");
 
         build.blockStart("void tick_screen_by_id(enum ScreensEnum screenId) {");
-        build.line("tick_screen(screenId - 1);");
+        build.line(
+            "const ui_screen_descriptor_t *screen = ui_screen_find(screenId);"
+        );
+        build.blockStart("if (screen != NULL && screen->tick != NULL) {");
+        build.line("screen->tick();");
+        build.blockEnd("}");
         build.blockEnd(`}`)
 
         build.line("");
@@ -2730,11 +3086,16 @@ export class LVGLBuild extends Build {
 
         // generate code for change_color_theme
         const build = this;
+        const hasFlowSupport =
+            this.assets.projectStore.projectTypeTraits.hasFlowSupport;
 
-        build.blockStart(`void change_color_theme(uint32_t theme_index) {`);
-
-        if (!this.assets.projectStore.projectTypeTraits.hasFlowSupport) {
-            build.line("active_theme_index = theme_index;");
+        if (hasFlowSupport) {
+            build.blockStart(`void change_color_theme(uint32_t theme_index) {`);
+        } else {
+            build.blockStart(
+                `static void apply_color_theme(enum Themes theme) {`
+            );
+            build.line("uint32_t theme_index = (uint32_t)theme;");
             build.line("");
         }
 
@@ -2846,6 +3207,46 @@ export class LVGLBuild extends Build {
             });
 
         build.blockEnd("}");
+
+        if (!hasFlowSupport) {
+            build.line("");
+            build.blockStart("bool ui_theme_set(enum Themes theme) {");
+            build.line("uint32_t theme_index = (uint32_t)theme;");
+            build.blockStart("if (theme_index >= UI_THEME_COUNT) {");
+            build.line("return false;");
+            build.blockEnd("}");
+            build.line("active_theme_index = theme_index;");
+            build.blockStart("if (ui_initialized) {");
+            build.line("apply_color_theme(theme);");
+            build.blockEnd("}");
+            build.line("return true;");
+            build.blockEnd("}");
+            build.line("");
+
+            build.blockStart("enum Themes ui_theme_get(void) {");
+            build.line("return (enum Themes)active_theme_index;");
+            build.blockEnd("}");
+            build.line("");
+
+            build.blockStart(
+                "lv_color_t ui_theme_get_color(enum Colors color) {"
+            );
+            build.line("uint32_t color_index = (uint32_t)color;");
+            build.blockStart(
+                "if (active_theme_index >= UI_THEME_COUNT || color_index >= UI_COLOR_COUNT) {"
+            );
+            build.line("return lv_color_hex(0);");
+            build.blockEnd("}");
+            build.line(
+                "return lv_color_hex(theme_colors[active_theme_index][color_index]);"
+            );
+            build.blockEnd("}");
+            build.line("");
+
+            build.blockStart("void change_color_theme(uint32_t theme_index) {");
+            build.line("ui_theme_set((enum Themes)theme_index);");
+            build.blockEnd("}");
+        }
     }
 
     async buildScreensDeclExt() {
@@ -3317,7 +3718,7 @@ extern ext_font_desc_t fonts[];
 
         build.indent();
         build.line(
-            `loadScreen(SCREEN_ID_${this.getScreenIdentifier(this.pages[0]).toUpperCase()});`
+            `ui_load_screen(SCREEN_ID_${this.getScreenIdentifier(this.pages[0]).toUpperCase()});`
         );
         build.unindent();
 
