@@ -1,6 +1,6 @@
 # EEZ Studio MEP Fork - Screen Runtime Codegen Handover
 
-Date: 2026-07-15
+Date: 2026-07-16
 Branch: `mesp-lvgl-codegen`
 Release: `MEP FORK v1.0.2`
 Status: validated and prepared for commit
@@ -197,6 +197,33 @@ void ui_tick(void) {
 Projects should not be regenerated with this fork until their custom templates
 and private helpers have been checked for symbol collisions.
 
+### ESP32 Project Template Update
+
+A real ESP32 LVGL firmware project that already used custom `ui.c` and `ui.h`
+templates was updated after this runtime change. The project template now keeps
+only the generated public runtime calls:
+
+```c
+void ui_init() {
+    if (!ui_is_initialized()) {
+        ui_screens_init();
+    }
+
+    (void)ui_load_screen(SCREEN_ID_MAIN);
+}
+
+void ui_tick() {
+    ui_screens_tick();
+}
+```
+
+The custom template no longer declares private `currentScreen` state, private
+`loadScreen()` wrappers, `getLvglObjectFromIndex()`, EEZ Flow initialization
+branches, or flat `objects_t` pointer casts. This keeps future regeneration
+aligned with the forked generator and avoids reintroducing invalid screen root
+references such as passing the whole `objects.<screen>` struct where an
+`lv_obj_t *` root pointer is expected.
+
 ## Verification
 
 Source verification:
@@ -213,6 +240,22 @@ Integration verification used the DC502 STM32 LVGL project:
 EEZ headless export: no project errors or warnings
 Generated screens.h/screens.c: expected API present
 ARM GCC syntax check of screens.c and ui.c: OK
+```
+
+Additional integration verification used a real ESP32 LVGL dashboard project:
+
+```text
+custom ui.c/ui.h templates migrated to generated screen runtime API
+regenerated UI no longer contains flat screen object casts
+manual firmware build after migration passed in the target environment
+```
+
+Windows packaging verification:
+
+```text
+npm run build: OK
+electron-builder unsigned Windows installer: OK
+packaged app.asar contains MEP_FORK_VERSION 1.0.2
 ```
 
 The only compiler diagnostics were two existing LVGL deprecation warnings for
@@ -233,6 +276,13 @@ packages/project-editor/lvgl/build.ts
 This handover file is new:
 
 ```text
+handover_eez_screen_runtime_codegen.md
+```
+
+Documentation/changelist was updated after ESP32 template migration validation:
+
+```text
+MEP_FORK_CHANGES.md
 handover_eez_screen_runtime_codegen.md
 ```
 

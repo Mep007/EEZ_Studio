@@ -19,6 +19,27 @@ packages/eez-studio-shared/mep-fork.ts
 This release makes generated LVGL screen handling safe for hierarchical object
 structs and multi-screen projects.
 
+### Migration Note For Custom Templates
+
+Projects that override generated `ui.c` or `ui.h` must be migrated to the new
+screen runtime API. Custom templates should call `ui_screens_init()`,
+`ui_load_screen(SCREEN_ID_<FIRST_SCREEN>)` and `ui_screens_tick()` instead of
+keeping private screen state or flat object lookups.
+
+Remove legacy template code that uses:
+
+```text
+currentScreen
+getLvglObjectFromIndex()
+((lv_obj_t **)&objects)[index]
+screen_id - 1 screen mapping
+private loadScreen() / loadScreenAnim() implementations
+```
+
+A real ESP32 LVGL project with repeated dashboard tiles was migrated with this
+template model after regeneration, so subsequent EEZ exports keep the new
+runtime API instead of reintroducing the old flat screen handling.
+
 ### Screen Descriptors
 
 - Generates an explicit descriptor table for screen IDs, root pointers, create
@@ -60,6 +81,9 @@ structs and multi-screen projects.
 - Gulp release build passed.
 - DC502 headless EEZ export completed without project errors or warnings.
 - Generated `screens.c` and `ui.c` passed ARM GCC syntax validation.
+- A real ESP32 LVGL project regenerated successfully after its custom
+  `ui.c`/`ui.h` templates were updated to the new runtime API.
+- Windows source build and unsigned installer packaging were verified locally.
 
 Detailed implementation and migration notes are available in:
 
