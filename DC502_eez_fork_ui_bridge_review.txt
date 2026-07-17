@@ -1,0 +1,412 @@
+DC502 / EEZ MEP FORK - REVIEW NAVRHU OBOUSMERNEHO UI BRIDGE
+===========================================================
+
+Datum: 2026-07-16
+Navazuje na: DC502_eez_fork_ui_bridge_analysis.txt
+Predpokladana cilova verze forku: MEP FORK v1.0.3
+
+VERDIKT
+-------
+
+Priprava obousmerneho UI <-> APP event bridge v EEZ forku dava smysl.
+Puvodni analyza ma spravne zakladni rozdeleni odpovednosti:
+
+    EEZ fork generuje obecnou infrastrukturu.
+    Firmware definuje konkretni eventy, commandy a jejich payloady.
+    EEZ regenerace nesmi prepisovat rucne psany kod.
+
+Bridge ale nema generovat aplikacni architekturu konkretniho DC502 nebo
+MESP604 projektu. Ma zustat nezavisly na RTOS, VarStore, ESP-IDF, STM32 HAL,
+CAN, UART a dalsich transportech.
+
+HLAVNI SOUCASNY LIMIT
+---------------------
+
+Aktualni screen lifecycle API obsahuje pouze jeden registrovatelny callback:
+
+    ui_set_screen_event_callback(callback, user_data)
+
+To nestaci pro budouci kombinaci:
+
+    PageRuntime
+    UI bridge
+    diagnostika nebo logger
+    dalsi uzivatelsky observer
+
+Kazda dalsi registrace by predchozi callback prepsala. Pred implementaci bridge
+je proto vhodne pridat podporu vice lifecycle listeneru.
+
+Doporuceni:
+
+    staticke pole listeneru
+    zadna dynamicka alokace
+    pevna kapacita, napr. 4 listenery
+    registrace vrati handle nebo index
+    podpora explicitniho unregister
+    puvodni setter ponechat jako kompatibilni wrapper
+
+GENEROVANY A UZIVATELSKY KOD
+----------------------------
+
+Doporucene rozdeleni:
+
+    ui_eez/
+        generated EEZ sources
+        ui_bridge.h
+        ui_bridge.c
+
+    ui_user/
+        ui_bridge_app.c
+        ui_bridge_app.h
+        ui_proto.h
+
+`ui_bridge.h/c` jsou plne generovane a EEZ je muze pri kazdem exportu
+prepsat. Vse pod `ui_user` vlastni firmware projekt a EEZ se techto souboru
+nedotyka.
+
+V prvni verzi nedoporucuji automaticky vytvaret soubory typu:
+
+    uiu_screen_1.c
+    uiu_screen_2.c
+
+Jednorazove generovane uzivatelske soubory komplikuji rename a odstraneni
+screenu, manifest orphan souboru a rozliseni, kdo soubor vlastni. Registracni
+API je jednodussi a nevyzaduje generovane prazdne handlery.
+
+DOPORUCENE OBECNE DATOVE ROZHRANI
+---------------------------------
+
+Bridge muze pouzivat transportne neutralni zpravu:
+
+    typedef struct {
+        uint32_t id;
+        enum ScreensEnum screen_id;
+        const void *payload;
+        uint32_t payload_size;
+    } ui_bridge_message_t;
+
+Vyznaceni poli:
+
+    id           APP event ID nebo UI command ID
+    screen_id    cilovy screen pro APP -> UI, zdrojovy screen pro UI -> APP
+    payload      volitelna projektova data
+    payload_size velikost payloadu v bytech
+
+Callback:
+
+    typedef bool (*ui_bridge_event_handler_t)(
+        const ui_bridge_message_t *message,
+        void *user_data
+    );
+
+Navratova hodnota `bool` muze informovat volajiciho, zda byla zprava prijata.
+
+SMER APP -> UI
+--------------
+
+Firmware registruje handler ke konkretnimu screenu:
+
+    bool ui_bridge_set_screen_handler(
+        enum ScreensEnum screen_id,
+        ui_bridge_event_handler_t handler,
+        void *user_data
+    );
+
+Dispatch aktivnimu screenu:
+
+    bool ui_bridge_dispatch_to_active(
+        uint32_t event_id,
+        const void *payload,
+        uint32_t payload_size
+    );
+
+Dispatch explicitne zvolenemu screenu:
+
+    bool ui_bridge_dispatch_to_screen(
+        enum ScreensEnum screen_id,
+        uint32_t event_id,
+        const void *payload,
+        uint32_t payload_size
+    );
+
+`dispatch_to_active()` pouzije `ui_screen_get_active()`. Pokud neni aktivni
+platny screen nebo neni registrovan handler, vrati `false`.
+
+Explicitni varianta je uzitecna pro pripravu dat neaktivni page, ale samotny
+handler musi respektovat, zda muze bezpecne sahat na LVGL objekty daneho
+screenu.
+
+SMER UI -> APP
+--------------
+
+Aplikace zaregistruje jeden command sink:
+
+    void ui_bridge_set_command_sink(
+        ui_bridge_event_handler_t handler,
+        void *user_data
+    );
+
+UI odesle command:
+
+    bool ui_bridge_emit_command(
+        uint32_t command_id,
+        const void *payload,
+        uint32_t payload_size
+    );
+
+Bridge automaticky doplni aktualni `ui_screen_get_active()` jako zdrojovy
+screen. Projektova aplikace rozhodne, zda command zpracuje primo nebo jej
+zkopiruje do vlastni RTOS fronty.
+
+THREADING A VLASTNICTVI DAT
+---------------------------
+
+Prvni verze bridge ma byt synchronni a nema obsahovat vlastni frontu.
+
+Pravidla:
+
+    APP -> UI dispatch se vola pouze z LVGL/UI threadu.
+    Bridge nekopiruje payload.
+    Payload je platny pouze po dobu callbacku.
+    Callback nesmi ulozit samotny pointer pro pozdejsi pouziti.
+    Pri predani do jineho tasku musi firmware payload zkopirovat.
+    UI -> APP callback bezi v LVGL/UI threadu a nema dlouho blokovat.
+
+Pokud APP event vznikne v jinem RTOS tasku, konkretni projekt jej nejprve ulozi
+do vlastni fronty. Fronta se vybere v LVGL timeru, `ui_tick()` nebo jinem
+mechanismu bezicim v UI kontextu a teprve potom se zavola bridge dispatch.
+
+RTOS fronta nema byt soucasti EEZ forku, protoze:
+
+    STM32 projekt muze pouzivat CMSIS-RTOS nebo FreeRTOS API
+    ESP32 projekt pouziva ESP-IDF/FreeRTOS
+    jiny projekt muze bezet bez RTOS
+    pozadavky na kopirovani a velikost fronty jsou projektove specificke
+
+UI ACTIONS
+----------
+
+Soucasny LVGL generator deklaruje funkce typu:
+
+    action_lcd_backlight_change(lv_event_t *e)
+    action_next_page_but_ev(lv_event_t *e)
+
+Jejich implementaci ale vlastni firmware. Generator proto v prvni verzi nesmi
+automaticky generovat stejne funkce, jinak by vznikly duplicitni symboly.
+
+Vhodna priprava je generovat stabilni enum pro EEZ actions:
+
+    enum UiActionId {
+        UI_ACTION_ID_NONE = 0,
+        UI_ACTION_ID_LCD_BACKLIGHT_CHANGE,
+        UI_ACTION_ID_NEXT_PAGE_BUT_EV,
+        UI_ACTION_ID_PREV_PAGE_BUT_EV
+    };
+
+A pomocnou funkci:
+
+    bool ui_bridge_emit_action(
+        enum UiActionId action_id,
+        lv_event_t *event
+    );
+
+Existujici rucne psana action pak muze provest:
+
+    void action_next_page_but_ev(lv_event_t *event)
+    {
+        (void)ui_bridge_emit_action(
+            UI_ACTION_ID_NEXT_PAGE_BUT_EV,
+            event
+        );
+    }
+
+Action callback je synchronni. Aplikace muze z `lv_event_t` precist target,
+hodnotu slideru nebo jiny stav a vytvorit vlastni command payload. Pointer na
+`lv_event_t` se nesmi ulozit pro pozdejsi zpracovani.
+
+Automaticke generovani cele action funkce lze pridat pozdeji, napr. novym
+implementation type nebo volbou `Forward to app bridge`. Tato funkce musi byt
+opt-in a nesmi prepsat action s vlastni implementaci.
+
+SCREEN A ACTION ID
+------------------
+
+Aktualni screen enum je generovan podle poradi screenu. To je bezpecne, pokud
+UI i APP pouzivaji stejny generated header ve stejnem firmware buildu.
+
+Automaticky generovana cisla ale nejsou vhodna jako dlouhodobe stabilni:
+
+    CAN protocol ID
+    UART protocol ID
+    sitovy protocol
+    hodnota ulozena do persistentni konfigurace
+    komunikace mezi firmware s ruznymi verzemi UI
+
+Pro externi nebo persistentni protokol musi projekt pouzit vlastni explicitne
+prirazena ID. Generovana `ScreensEnum` a `UiActionId` jsou primarne interni
+compile-time kontrakt.
+
+LIFECYCLE NAPOJENI
+------------------
+
+Bridge muze handleru predavat take screen lifecycle udalosti:
+
+    UI_SCREEN_EVENT_LOAD_START
+    UI_SCREEN_EVENT_LOADED
+    UI_SCREEN_EVENT_UNLOAD_START
+    UI_SCREEN_EVENT_UNLOADED
+
+Lifecycle listener a APP event handler nemusi byt stejna funkce. Doporucene je
+mit samostatne callbacky, aby se nemichaly systemove screen udalosti s
+projektovymi APP event ID.
+
+Bridge nema prebirat odpovednost `PageRuntime`. PageRuntime muze pouzit stejny
+multi-listener lifecycle API, zatimco bridge obsluhuje zpravy mezi UI a APP.
+
+NASTAVENI EEZ PROJEKTU
+----------------------
+
+Prvni verze potrebuje pouze jednu novou build volbu:
+
+    Generate UI event bridge
+
+Projektovy klic:
+
+    project.settings.build.generateUiEventBridge
+
+Vychozi hodnota:
+
+    false
+
+Nedoporucuji zatim pridavat:
+
+    userBridgePrefix
+    userOutputDirectory
+    automatickou volbu RTOS transportu
+
+Pevny prefix `ui_bridge_` je predvidatelny a snizuje pocet variant generatoru.
+Umisteni generated souboru muze pouzit existujici EEZ build file mechanismus a
+destination folder.
+
+GENEROVANE BUILD SEKCE
+----------------------
+
+Fork muze pridat build sekce:
+
+    LVGL_UI_BRIDGE_DECL
+    LVGL_UI_BRIDGE_DEF
+
+Vychozi sablony `ui_bridge.h/c` je vlozi do samostatnych generated souboru.
+Starsi projekty mohou soubory pridat do Build files rucne. Nove projekty je
+mohou dostat automaticky, pokud je bridge volba zapnuta.
+
+Alternativou je vlozit API primo do `screens.h/c`, ale samostatny soubor lepe
+oddeluje screen runtime od komunikacniho bridge a umozni bridge kompletne
+vypnout.
+
+CO GENEROVAT
+------------
+
+    obecny `ui_bridge_message_t`
+    per-screen registracni tabulku
+    APP -> aktivni screen dispatch
+    APP -> explicitni screen dispatch
+    UI -> APP command sink
+    action ID enum a action emit helper
+    multi-listener screen lifecycle
+    compile-time kapacity a validaci ID
+    dokumentaci synchronniho kontraktu
+
+CO NEGENEROVAT
+--------------
+
+    konkretni APP event enum
+    konkretni UI command enum
+    VarStore ID a VsVarGet/VsVarWrite volani
+    FreeRTOS nebo CMSIS-RTOS frontu
+    mutexy konkretniho projektu
+    IoMan rozhodovani
+    CAN, UART, USB nebo sitovy transport
+    projektove payload structy
+    obsah page handleru
+    automaticke mazani uzivatelskych souboru
+
+DOPORUCENE PORADI IMPLEMENTACE PRO v1.0.3
+-----------------------------------------
+
+1. Rozsirit lifecycle z jednoho callbacku na vice listeneru.
+2. Pridat build volbu `generateUiEventBridge`, default `false`.
+3. Pridat generated `ui_bridge.h/c` a nove build sekce.
+4. Implementovat registraci handleru podle `ScreensEnum`.
+5. Implementovat `dispatch_to_active()` a `dispatch_to_screen()`.
+6. Implementovat UI -> APP command sink a `emit_command()`.
+7. Vygenerovat `UiActionId` podle EEZ actions.
+8. Pridat rucne volany `ui_bridge_emit_action()` helper.
+9. Overit projekt bez screenu, jeden screen a vice screenu.
+10. Overit LVGL 8 i LVGL 9 vystup.
+11. Overit, ze vypnuta volba nemeni stavajici generated output.
+12. Otestovat integraci na DC502 a MESP604 bez zmeny jejich transportu.
+
+INTEGRACE DC502
+---------------
+
+DC502 muze pouzit:
+
+    APP task/IoMan -> projektova fronta -> UI thread
+    UI thread -> ui_bridge_dispatch_to_active()
+    screen handler -> update widgetu pres nested objects cesty
+
+UI action muze zavolat `ui_bridge_emit_command()`. Aplikacni sink command
+zkopiruje do existujici fronty nebo jej zpracuje podle architektury DC502.
+
+Do forku se nesmi dostat DC502 symboly jako konkretni VarStore ID, IoMan
+funkce nebo konkretni backlight event payload.
+
+INTEGRACE MESP604
+-----------------
+
+MESP604 ma vlastni `PageRuntime` a rucne implementovane EEZ action funkce.
+
+Doporucena integrace:
+
+    PageRuntime pouzije jeden lifecycle listener.
+    Bridge pouzije vlastni listener nebo interni napojeni.
+    APP event fronta se vybira v LVGL kontextu.
+    APP event se posle aktivni page pres `dispatch_to_active()`.
+    Existujici action funkce rucne volaji `emit_action()` nebo
+    `emit_command()`.
+
+Prvni integrace nesmi automaticky menit casovani PageRuntime Start/Exit hooku
+behem screen animaci.
+
+ZPETNA KOMPATIBILITA
+--------------------
+
+Pri `generateUiEventBridge = false` se vystup nesmi funkcne zmenit.
+
+Pri zapnuti bridge:
+
+    stavajici `objects` cesty zustanou stejne
+    stavajici action deklarace zustanou stejne
+    stavajici user action implementace zustanou platne
+    `ui_load_screen*()` zustane beze zmeny
+    `ui_screens_tick()` zustane zdrojem screen ticku
+    puvodni lifecycle setter zustane kompatibilni
+
+ZAVER
+-----
+
+Bridge je vhodny dalsi krok pro MEP fork, pokud bude implementovan jako mala,
+synchronni a transportne neutralni vrstva.
+
+Nejvetsi hodnotu prinese:
+
+    jednotny APP -> UI dispatch podle aktivniho screenu
+    jednotny UI -> APP command sink
+    generovana action metadata
+    vice nez jeden lifecycle listener
+    jasny thread a payload ownership kontrakt
+
+Fork nema generovat DC502 ani MESP604 aplikacni logiku. Ma pouze poskytnout
+stabilni extension pointy, nad kterymi si kazdy firmware postavi vlastni fronty,
+protokol a page handlery.

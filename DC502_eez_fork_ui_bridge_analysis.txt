@@ -1,0 +1,134 @@
+DC502 / EEZ FORK - NAVRH GENEROVANI UI BRIDGE
+============================================================
+
+Ano, EEZ fork muze predpripravit UI bridge. Mel by ale generovat pouze
+obecnou kostru bridge, nikoliv projektove specifickou logiku DC502.
+
+Zakladni rozdeleni odpovednosti
+------------------------------------------------------------
+
+- EEZ generuje infrastrukturu a vazby na obrazovky.
+- Rucne psana cast definuje APP eventy, UI commandy a reakce konkretnich
+  widgetu.
+- Regenerace EEZ nesmi prepsat uzivatelsky kod.
+
+Mozna struktura vystupu
+------------------------------------------------------------
+
+ui_eez/
+    generated sources...
+
+ui_user/
+    generated/
+        uiu_screen_dispatch.c
+        uiu_screen_dispatch.h
+        uiu_widget_bindings.c
+        uiu_widget_bindings.h
+
+    screens/
+        uiu_screen_1.c
+        uiu_screen_1.h
+
+    uiu_bridge_core.c
+    uiu_bridge_core.h
+    uiu_proto.h
+
+Co je vhodne generovat automaticky
+------------------------------------------------------------
+
+- Seznam screenu a jejich ID.
+- Vazbu screen ID -> OnAppEvent()/Enter()/Update()/Leave().
+- Deklarace screen handleru.
+- Centralni dispatch APP -> UI eventu aktivnimu screenu.
+- Lifecycle napojeni na EEZ.
+- Pripadne registraci UI actions.
+- Bezpecne odkazy na widgety podle hierarchicke cesty.
+- Volitelne prazdny switch(event->id) pro kazdy screen.
+
+Priklad generovaneho dispatche
+------------------------------------------------------------
+
+void Uiu_AppToUi_Dispatch(const app_evt_t *event)
+{
+    switch(ui_screen_get_active()) {
+        case SCREEN_ID_SCREEN_1:
+            UiuScreen1_OnAppEvent(event);
+            break;
+
+        case SCREEN_ID_SCREEN_2:
+            UiuScreen2_OnAppEvent(event);
+            break;
+
+        default:
+            break;
+    }
+}
+
+Co negenerovat do EEZ forku napevno
+------------------------------------------------------------
+
+- VAR_DISP_BL, VAR_BL_REQ a dalsi VarStore ID.
+- Volani VsVarGet() a VsVarWrite().
+- Konkretni payload APP_EVT_BACKLIGHT_CHANGED.
+- RTOS fronty a jejich konkretni implementaci.
+- Aplikacni rozhodovani IoManu.
+- Vlastni obsah screen handleru.
+
+Tyto casti patri do konkretniho projektu. Jine zarizeni muze pouzivat jiny
+VarStore, RTOS nebo uplne jinou aplikacni architekturu.
+
+Mozna konfigurace EEZ projektu
+------------------------------------------------------------
+
+{
+    "generateUserBridge": true,
+    "userBridgePrefix": "Uiu",
+    "generateScreenLifecycle": true,
+    "generateScreenEventHandlers": true,
+    "userOutputDirectory": "../ui_user"
+}
+
+Bezpecna regenerace
+------------------------------------------------------------
+
+Jsou dve vhodne moznosti:
+
+1. Generovat pouze soubory, ktere uzivatel nikdy neupravuje, například
+   uiu_screen_dispatch.generated.c.
+
+2. Uzivatelske soubory vytvorit pouze tehdy, kdyz jeste neexistuji.
+
+Doporucena je kombinace obou pristupu:
+
+- *.generated.c/h EEZ vzdy pregeneruje.
+- screens/uiu_screen_X.c/h vytvori pouze pri prvnim exportu.
+- Pri odstraneni nebo prejmenovani screenu EEZ pouze vypise upozorneni;
+  uzivatelsky soubor automaticky nemaze.
+
+Metadata misto rozsahleho generovaneho bridge
+------------------------------------------------------------
+
+EEZ muze generovat pouze seznam metadat:
+
+#define UIU_SCREEN_LIST(X)             \
+    X(SCREEN_ID_SCREEN_1, Screen1)     \
+    X(SCREEN_ID_SCREEN_2, Screen2)
+
+Z tohoto seznamu lze makry vytvorit deklarace i dispatch. Tim se snizi
+mnozstvi kodu, ktere musi EEZ fork udrzovat.
+
+Doporuceny zaver
+------------------------------------------------------------
+
+EEZ fork by mel pripravit:
+
+- screen lifecycle,
+- dispatch eventu aktivnimu screenu,
+- deklarace extension pointu,
+- bezpecne vazby na vygenerovane objekty,
+- pripadne jednorazove sablony uzivatelskych screen souboru.
+
+Samotny obousmerny transport, typy projektovych eventu a commandu, VarStore
+a jejich aplikacni vyznam maji zustat v ui_user. Nejsou vlastnosti EEZ UI,
+ale architektury konkretniho firmware.
+
