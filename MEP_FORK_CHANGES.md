@@ -1,17 +1,80 @@
 # MEP Fork Changes
 
-Current fork release: `MEP FORK v1.0.2`
+Current fork release: `MEP FORK v1.0.3`
 
 The release is shown in the application title as:
 
 ```text
-MEP FORK v1.0.2 - EEZ Studio
+MEP FORK v1.0.3 - EEZ Studio
 ```
 
 The fork version is defined once in:
 
 ```text
 packages/eez-studio-shared/mep-fork.ts
+```
+
+## v1.0.3 - App/UI Bridge Code Generation
+
+This release adds an optional, transport-neutral bridge between generated LVGL
+UI code and application code.
+
+### Bridge Generator
+
+- Adds `Generate App/UI bridge` and related output, transport, queue and update
+  settings under Build.
+- Generates a portable UI engine and screen controller registry from the same
+  screen identifiers used by the LVGL generator.
+- Creates user-owned message contracts, screen controllers and APP command
+  handlers only when they are missing.
+- Generates CMake and Make source lists without editing firmware build files.
+
+### Runtime And Transports
+
+- Adds static multi-listener lifecycle and screen tick APIs while preserving the
+  original single callback setters.
+- Dispatches queued APP events only to the active screen controller from the
+  existing LVGL tick context.
+- Supports ESP-IDF FreeRTOS, standard FreeRTOS and CMSIS-RTOS2 queues.
+- Provides a user-owned custom transport scaffold for other schedulers or
+  bare-metal projects.
+- Keeps queue operations nonblocking and exposes dropped/received counters.
+- Forces `run-eez-studio-dev.bat` to use the local Electron binary and an
+  isolated development profile, so it can run beside an installed EEZ Studio.
+
+### Regeneration Safety
+
+- Keeps generated files under `ui_app/generated` and tracks them in a separate
+  `.eez-bridge-build` manifest.
+- Never adds user-owned bridge files to orphan cleanup.
+- Compares generated `UI_BRIDGE_API_VERSION` with the user-owned
+  `UI_BRIDGE_USER_API_VERSION` and stops compilation when it is missing or
+  incompatible.
+- Uses containment, real-path and regular-file checks before generated writes
+  or orphan deletion.
+- Rejects unsafe manifest paths and warns about controllers left behind after a
+  screen rename or removal.
+
+### Validation
+
+- TypeScript compilation and Gulp release build passed.
+- Bridge-disabled and bridge-enabled MESP604 headless exports passed.
+- Enabling the bridge did not change the standard generated UI files.
+- Repeated export preserved a manually edited controller byte for byte.
+- Renaming a screen updated the registry, created its new controller, retained
+  the old controller and emitted an orphan warning.
+- Unsafe orphan cleanup was rejected while a valid generated orphan was
+  removed.
+- Custom, ESP-IDF FreeRTOS, standard FreeRTOS and CMSIS-RTOS2 outputs passed
+  ARM GCC C11 syntax checks with warnings treated as errors.
+- Matching bridge API versions compiled, while mismatched and missing
+  user-owned API versions were rejected by the generated headers.
+- Generated `screens.c` passed ARM GCC syntax validation against LVGL.
+
+Detailed implementation and integration notes are available in:
+
+```text
+handover_eez_app_ui_bridge_codegen.md
 ```
 
 ## v1.0.2 - Hierarchical Screen Runtime

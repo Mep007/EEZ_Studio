@@ -37,6 +37,7 @@ import { cleanupSourceFile } from "project-editor/build/cleanup-c-source-files";
 import { BUILT_IN_FONTS } from "project-editor/lvgl/style-catalog";
 import { visitObjects } from "project-editor/core/search";
 import { ColorFormat, ColorFormatType } from "project-editor/features/style/color-format";
+import { getLvglScreenIdentifier } from "project-editor/lvgl/screen-codegen-helpers";
 
 interface Identifiers {
     identifiers: string[];
@@ -762,7 +763,7 @@ export class LVGLBuild extends Build {
     }
 
     getScreenIdentifier(page: Page) {
-        return getName("", page, NamingConvention.UnderscoreLowerCase);
+        return getLvglScreenIdentifier(page);
     }
 
     getScreenCreateFunctionName(page: Page) {
@@ -1618,6 +1619,8 @@ export class LVGLBuild extends Build {
         build.blockEnd(`};`);
         build.line("");
         build.line(`#define UI_SCREEN_COUNT ${pages.length}U`);
+        build.line("#define UI_SCREEN_EVENT_LISTENER_CAPACITY 4U");
+        build.line("#define UI_SCREEN_TICK_LISTENER_CAPACITY 4U");
         build.line("");
 
         build.blockStart("typedef enum {");
@@ -1632,6 +1635,10 @@ export class LVGLBuild extends Build {
         );
         build.line(
             "typedef void (*ui_screen_tick_cb_t)(enum ScreensEnum screen_id, void *user_data);"
+        );
+        build.line("typedef uint8_t ui_listener_handle_t;");
+        build.line(
+            "#define UI_LISTENER_HANDLE_INVALID ((ui_listener_handle_t)0U)"
         );
         build.line("");
 
@@ -1678,6 +1685,18 @@ export class LVGLBuild extends Build {
         );
         build.line(
             "void ui_set_screen_tick_callback(ui_screen_tick_cb_t callback, void *user_data);"
+        );
+        build.line(
+            "ui_listener_handle_t ui_add_screen_event_listener(ui_screen_event_cb_t callback, void *user_data);"
+        );
+        build.line(
+            "bool ui_remove_screen_event_listener(ui_listener_handle_t handle);"
+        );
+        build.line(
+            "ui_listener_handle_t ui_add_screen_tick_listener(ui_screen_tick_cb_t callback, void *user_data);"
+        );
+        build.line(
+            "bool ui_remove_screen_tick_listener(ui_listener_handle_t handle);"
         );
         build.line("");
 
@@ -1952,6 +1971,66 @@ export class LVGLBuild extends Build {
         build.line("static void *screen_event_user_data;");
         build.line("static ui_screen_tick_cb_t screen_tick_callback;");
         build.line("static void *screen_tick_user_data;");
+        build.blockStart("typedef struct {");
+        build.line("ui_screen_event_cb_t callback;");
+        build.line("void *user_data;");
+        build.blockEnd("} ui_screen_event_listener_t;");
+        build.blockStart("typedef struct {");
+        build.line("ui_screen_tick_cb_t callback;");
+        build.line("void *user_data;");
+        build.blockEnd("} ui_screen_tick_listener_t;");
+        build.line(
+            "static ui_screen_event_listener_t screen_event_listeners[UI_SCREEN_EVENT_LISTENER_CAPACITY];"
+        );
+        build.line(
+            "static ui_screen_tick_listener_t screen_tick_listeners[UI_SCREEN_TICK_LISTENER_CAPACITY];"
+        );
+        build.line("");
+
+        build.blockStart(
+            "static void ui_notify_screen_event(enum ScreensEnum screen_id, ui_screen_event_t event) {"
+        );
+        build.blockStart("if (screen_event_callback != NULL) {");
+        build.line(
+            "screen_event_callback(screen_id, event, screen_event_user_data);"
+        );
+        build.blockEnd("}");
+        build.blockStart(
+            "for (uint32_t i = 0; i < UI_SCREEN_EVENT_LISTENER_CAPACITY; i++) {"
+        );
+        build.line(
+            "ui_screen_event_cb_t callback = screen_event_listeners[i].callback;"
+        );
+        build.blockStart("if (callback != NULL) {");
+        build.line(
+            "callback(screen_id, event, screen_event_listeners[i].user_data);"
+        );
+        build.blockEnd("}");
+        build.blockEnd("}");
+        build.blockEnd("}");
+        build.line("");
+
+        build.blockStart(
+            "static void ui_notify_screen_tick(enum ScreensEnum screen_id) {"
+        );
+        build.blockStart("if (screen_tick_callback != NULL) {");
+        build.line(
+            "screen_tick_callback(screen_id, screen_tick_user_data);"
+        );
+        build.blockEnd("}");
+        build.blockStart(
+            "for (uint32_t i = 0; i < UI_SCREEN_TICK_LISTENER_CAPACITY; i++) {"
+        );
+        build.line(
+            "ui_screen_tick_cb_t callback = screen_tick_listeners[i].callback;"
+        );
+        build.blockStart("if (callback != NULL) {");
+        build.line(
+            "callback(screen_id, screen_tick_listeners[i].user_data);"
+        );
+        build.blockEnd("}");
+        build.blockEnd("}");
+        build.blockEnd("}");
         build.line("");
 
         build.blockStart(
@@ -2011,11 +2090,7 @@ export class LVGLBuild extends Build {
         build.line("return;");
         build.unindent();
         build.blockEnd("}");
-        build.blockStart("if (screen_event_callback != NULL) {");
-        build.line(
-            "screen_event_callback(screen_id, ui_event, screen_event_user_data);"
-        );
-        build.blockEnd("}");
+        build.line("ui_notify_screen_event(screen_id, ui_event);");
         build.blockEnd("}");
         build.line("");
 
@@ -2065,6 +2140,80 @@ export class LVGLBuild extends Build {
         build.blockEnd("}");
         build.line("");
 
+        build.blockStart(
+            "ui_listener_handle_t ui_add_screen_event_listener(ui_screen_event_cb_t callback, void *user_data) {"
+        );
+        build.blockStart("if (callback == NULL) {");
+        build.line("return UI_LISTENER_HANDLE_INVALID;");
+        build.blockEnd("}");
+        build.blockStart(
+            "for (uint32_t i = 0; i < UI_SCREEN_EVENT_LISTENER_CAPACITY; i++) {"
+        );
+        build.blockStart("if (screen_event_listeners[i].callback == NULL) {");
+        build.line("screen_event_listeners[i].callback = callback;");
+        build.line("screen_event_listeners[i].user_data = user_data;");
+        build.line("return (ui_listener_handle_t)(i + 1U);");
+        build.blockEnd("}");
+        build.blockEnd("}");
+        build.line("return UI_LISTENER_HANDLE_INVALID;");
+        build.blockEnd("}");
+        build.line("");
+
+        build.blockStart(
+            "bool ui_remove_screen_event_listener(ui_listener_handle_t handle) {"
+        );
+        build.blockStart(
+            "if (handle == UI_LISTENER_HANDLE_INVALID || handle > UI_SCREEN_EVENT_LISTENER_CAPACITY) {"
+        );
+        build.line("return false;");
+        build.blockEnd("}");
+        build.line("uint32_t index = (uint32_t)handle - 1U;");
+        build.blockStart("if (screen_event_listeners[index].callback == NULL) {");
+        build.line("return false;");
+        build.blockEnd("}");
+        build.line("screen_event_listeners[index].callback = NULL;");
+        build.line("screen_event_listeners[index].user_data = NULL;");
+        build.line("return true;");
+        build.blockEnd("}");
+        build.line("");
+
+        build.blockStart(
+            "ui_listener_handle_t ui_add_screen_tick_listener(ui_screen_tick_cb_t callback, void *user_data) {"
+        );
+        build.blockStart("if (callback == NULL) {");
+        build.line("return UI_LISTENER_HANDLE_INVALID;");
+        build.blockEnd("}");
+        build.blockStart(
+            "for (uint32_t i = 0; i < UI_SCREEN_TICK_LISTENER_CAPACITY; i++) {"
+        );
+        build.blockStart("if (screen_tick_listeners[i].callback == NULL) {");
+        build.line("screen_tick_listeners[i].callback = callback;");
+        build.line("screen_tick_listeners[i].user_data = user_data;");
+        build.line("return (ui_listener_handle_t)(i + 1U);");
+        build.blockEnd("}");
+        build.blockEnd("}");
+        build.line("return UI_LISTENER_HANDLE_INVALID;");
+        build.blockEnd("}");
+        build.line("");
+
+        build.blockStart(
+            "bool ui_remove_screen_tick_listener(ui_listener_handle_t handle) {"
+        );
+        build.blockStart(
+            "if (handle == UI_LISTENER_HANDLE_INVALID || handle > UI_SCREEN_TICK_LISTENER_CAPACITY) {"
+        );
+        build.line("return false;");
+        build.blockEnd("}");
+        build.line("uint32_t index = (uint32_t)handle - 1U;");
+        build.blockStart("if (screen_tick_listeners[index].callback == NULL) {");
+        build.line("return false;");
+        build.blockEnd("}");
+        build.line("screen_tick_listeners[index].callback = NULL;");
+        build.line("screen_tick_listeners[index].user_data = NULL;");
+        build.line("return true;");
+        build.blockEnd("}");
+        build.line("");
+
         if (this.isV9) {
             build.blockStart(
                 "bool ui_load_screen_anim(enum ScreensEnum screen_id, lv_screen_load_anim_t animation, uint32_t duration, uint32_t delay) {"
@@ -2087,11 +2236,9 @@ export class LVGLBuild extends Build {
         build.line("loading_screen = SCREEN_ID_NONE;");
         build.blockStart("if (active_screen != screen_id) {");
         build.line("active_screen = screen_id;");
-        build.blockStart("if (screen_event_callback != NULL) {");
         build.line(
-            "screen_event_callback(screen_id, UI_SCREEN_EVENT_LOADED, screen_event_user_data);"
+            "ui_notify_screen_event(screen_id, UI_SCREEN_EVENT_LOADED);"
         );
-        build.blockEnd("}");
         build.blockEnd("}");
         build.line("return true;");
         build.blockEnd("}");
@@ -2174,12 +2321,8 @@ export class LVGLBuild extends Build {
         build.blockStart("if (screen != NULL && screen->tick != NULL) {");
         build.line("screen->tick();");
         build.blockEnd("}");
-        build.blockStart(
-            "if (screen != NULL && screen_tick_callback != NULL) {"
-        );
-        build.line(
-            "screen_tick_callback(active_screen, screen_tick_user_data);"
-        );
+        build.blockStart("if (screen != NULL) {");
+        build.line("ui_notify_screen_tick(active_screen);");
         build.blockEnd("}");
         build.blockEnd("}");
         build.line("");

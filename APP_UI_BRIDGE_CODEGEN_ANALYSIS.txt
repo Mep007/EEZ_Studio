@@ -1,0 +1,814 @@
+EEZ STUDIO MEP FORK - APP/UI BRIDGE CODEGEN ANALYSIS
+====================================================
+
+Datum: 2026-07-23
+Fork: C:\esp\tools\EEZ_Studio
+Vetev v dobe analyzy: mesp-lvgl-codegen
+
+
+1. Cil
+-------
+
+Doplnit do EEZ Studio forku volitelne generovani infrastruktury pro striktne
+oddelenou komunikaci:
+
+    UI -> APP command
+    APP -> UI event
+
+Generator ma zaroven vytvaret kostru rucne psane UI vrstvy:
+
+    - obecny UI engine,
+    - message bus,
+    - screen controller registry,
+    - dispatcher APP -> UI eventu,
+    - controllery jednotlivych screenu,
+    - APP command handler,
+    - definice eventu a commandu,
+    - volitelny platformni transport.
+
+Opakovany EEZ export nesmi prepsat ani smazat uzivatelskou logiku.
+
+Vysledek musi byt pouzitelny pro ESP32 i STM32. Obecna vrstva proto nesmi byt
+zavisla na ESP-IDF, STM32 HAL ani jednom konkretnim RTOS.
+
+
+2. Existujici zaklad ve forku
+-----------------------------
+
+Fork uz v packages/project-editor/lvgl/build.ts generuje:
+
+    ui_screen_get_active()
+    ui_set_screen_event_callback()
+    ui_set_screen_tick_callback()
+    ui_screens_tick()
+    ui_screens_init()
+    ui_load_screen()
+
+Generovane lifecycle eventy:
+
+    UI_SCREEN_EVENT_LOAD_START
+    UI_SCREEN_EVENT_LOADED
+    UI_SCREEN_EVENT_UNLOAD_START
+    UI_SCREEN_EVENT_UNLOADED
+
+Generovany screen runtime dale obsahuje:
+
+    - explicitni descriptor tabulku EEZ screenu,
+    - requested/loading/active screen ID,
+    - bezpecnou podporu nested object structs,
+    - callback po ticku aktivniho screenu.
+
+Bridge proto nema menit zakladni logiku screens.c. Ma byt navazujici codegen
+vrstva postavena na jeho verejnem API.
+
+Pozor: generovane screens.h uz definuje typ:
+
+    ui_screen_descriptor_t
+
+Rucne psany APP/UI descriptor/controller proto musi pouzivat jiny nazev:
+
+    ui_screen_controller_t
+
+
+3. Pozadovana architektura
+--------------------------
+
+Zakladni pravidla:
+
+    UI nikdy primo nevykonava aplikacni operace.
+    APP nikdy primo nemeni LVGL objekty.
+
+Tok UI -> APP:
+
+    EEZ/LVGL callback
+        -> AppCmds_Post()
+        -> UI -> APP queue
+        -> AppUiCommands_Process() v APP tasku
+        -> vykonani Dio/VarStore/network/config/OTA operace
+
+Tok APP -> UI:
+
+    APP zmena nebo vysledek operace
+        -> UiEvents_Post()
+        -> APP -> UI queue
+        -> UI engine v LVGL kontextu
+        -> controller aktivniho screenu
+        -> OnAppEvent()
+        -> aktualizace konkretniho widgetu
+
+Periodicky screen update zustava podporovan pro jednoduche prezentacni udaje:
+
+    - cas a datum,
+    - sila signalu,
+    - jednoduche pravidelne indikatory,
+    - lehke lokalni animace.
+
+Periodicky Update() nesmi vykonavat APP operace.
+
+
+4. Screen controller
+--------------------
+
+Kazdy rucne obsluhovany screen ma controller descriptor:
+
+    typedef struct
+    {
+        enum ScreensEnum id;
+        uint32_t update_period_ms;
+        void (*enter)(void);
+        void (*update)(uint32_t elapsed_ms);
+        void (*on_event)(const ui_event_t *event);
+        void (*leave)(void);
+    } ui_screen_controller_t;
+
+Semantika:
+
+    enter
+        Volano po zobrazeni screenu.
+
+    update
+        Volano pouze podle update_period_ms.
+        Hodnota 0 nebo update == NULL periodicke volani vypne.
+
+    on_event
+        Volano jen pri prijeti APP -> UI eventu a pouze v LVGL kontextu.
+
+    leave
+        Volano pri ukonceni zobrazovani screenu.
+
+Priklad generovane registry:
+
+    static const ui_screen_controller_t screen_controllers[] = {
+        {
+            .id = SCREEN_ID_MAIN,
+            .update_period_ms = 100U,
+            .enter = MainScreen_Enter,
+            .update = MainScreen_Update,
+            .on_event = MainScreen_OnAppEvent,
+            .leave = MainScreen_Leave,
+        },
+    };
+
+EEZ zna seznam screenu, jejich ID i bezpecne C identifikatory, proto ma registry
+generovat kompletne.
+
+
+5. Navrhovane nastaveni EEZ
+---------------------------
+
+Do Settings -> Build doplnit:
+
+    Generate App/UI bridge
+        Boolean switch.
+
+    App/UI bridge output folder
+        Relativni adresar, napr. ../ui_app.
+
+    Application handler output folder
+        Relativni adresar, napr. ../app.
+
+    Bridge transport
+        Custom
+        FreeRTOS - ESP-IDF includes
+        FreeRTOS - standard includes
+        CMSIS-RTOS2
+
+    Default screen update period
+        Vychozi hodnota napr. 100 ms.
+
+    Generate missing user files
+        Vytvori chybejici user-owned soubory, existujicich se nedotkne.
+
+Pozdeji je vhodne pridat ke kazdemu screenu:
+
+    Generate UI controller
+    Controller update period
+
+Hodnota periody 0 znamena, ze se controller Update() periodicky nevola.
+
+
+6. Vlastnictvi vystupnich souboru
+---------------------------------
+
+Je nezbytne rozdelit vystup na generated a user-owned soubory.
+
+
+6.1 EEZ generated
+-----------------
+
+EEZ je pri kazdem exportu kompletne prepise:
+
+    ui_app/generated/
+        ui_engine.generated.c
+        ui_engine.generated.h
+        ui_screen_registry.generated.c
+        ui_screen_registry.generated.h
+        ui_screen_dispatcher.generated.c
+        ui_screen_dispatcher.generated.h
+        ui_bridge_config.generated.h
+        ui_bridge_sources.cmake
+        ui_bridge_sources.mk
+
+Uzivatel je nema rucne upravovat.
+
+
+6.2 User-owned
+--------------
+
+EEZ je smi pouze vytvorit, pokud jeste neexistuji:
+
+    ui_app/contract/
+        ui_messages.h
+
+    ui_app/screens/main/
+        main_screen_controller.c
+        main_screen_controller.h
+
+    ui_app/platform/
+        ui_message_bus.c
+        ui_message_bus.h
+
+    app/
+        app_ui_commands.c
+        app_ui_commands.h
+
+Pri dalsim exportu:
+
+    - existujici user soubor se nesmi otevrit k zapisu,
+    - novy screen muze vytvorit novy controller, pokud chybi,
+    - odstraneny screen nesmi zpusobit smazani controlleru,
+    - pri odstranenem/prejmenovanem screenu se ma vypsat warning.
+
+Zakladni pravidlo:
+
+    generated/ -> EEZ smi vzdy prepsat
+    user files -> EEZ smi pouze vytvorit, nikdy prepsat ani smazat
+
+
+7. Bezpecnost build manifestu
+-----------------------------
+
+Soucasny build tracking v:
+
+    packages/project-editor/build/build.ts
+
+sleduje soubory zapsane pres writeTextFile() do .eez-project-build a pri dalsim
+exportu maze orphaned files.
+
+Standardni EEZ destination muze byt:
+
+    main/ui
+
+Bridge output ale muze byt:
+
+    main/ui_app
+
+Pokud by se pouzil stavajici manifest, obsahoval by cesty typu:
+
+    ../ui_app/...
+
+To je nevhodne a nebezpecne zejmena pro user-owned soubory.
+
+Pozadovane reseni:
+
+    - nepouzivat standardni manifest pro ui_app,
+    - mit samostatny manifest pouze v:
+
+          ui_app/generated/.eez-bridge-build
+
+    - orphan cleanup omezit striktnim resolve/containment checkem pouze na
+      ui_app/generated,
+    - user-owned soubory do manifestu nezapisovat,
+    - pred unlink vzdy overit, ze resolved path zustava uvnitr generated root.
+
+Doporucene samostatne helpery:
+
+    writeGeneratedBridgeFile(...)
+    writeUserBridgeFileIfMissing(...)
+    cleanupGeneratedBridgeFiles(...)
+
+writeUserBridgeFileIfMissing() nesmi zapis registrovat do zadneho orphan
+manifestu.
+
+
+8. Message contract
+-------------------
+
+Verejne typy:
+
+    typedef enum
+    {
+        UI_EVENT_NONE = 0,
+    } ui_event_id_t;
+
+    typedef struct
+    {
+        ui_event_id_t id;
+        union
+        {
+            bool state;
+            int32_t i32;
+            uint32_t u32;
+        } data;
+    } ui_event_t;
+
+    // ------------------------------------------------------------------------------------------------
+
+    typedef enum
+    {
+        APP_CMD_NONE = 0,
+    } app_command_id_t;
+
+    typedef struct
+    {
+        app_command_id_t id;
+        union
+        {
+            bool state;
+            int32_t i32;
+            uint32_t u32;
+        } data;
+    } app_command_t;
+
+Naming:
+
+    APP_CMD_...
+    UI_EVENT_...
+
+Nepouzivat APP_COMMAND_ prefix.
+
+V prvni fazi ma byt ui_messages.h user-owned scaffold vytvoreny pouze jednou.
+EEZ nemuze samo odvodit projektove eventy jako GPIO, OTA, WiFi nebo VarStore.
+
+
+9. Message bus API
+------------------
+
+Verejne API musi byt shodne na ESP i STM32:
+
+    bool UiMessageBus_Init(void);
+
+    bool UiEvents_Post(const ui_event_t *event);
+    bool UiEvents_Receive(ui_event_t *event);
+
+    bool AppCmds_Post(const app_command_t *command);
+    bool AppCmds_Receive(app_command_t *command);
+
+    uint32_t UiEvents_GetDroppedCount(void);
+    uint32_t UiEvents_GetReceivedCount(void);
+    uint32_t AppCmds_GetDroppedCount(void);
+    uint32_t AppCmds_GetReceivedCount(void);
+
+Transport je jedina platformne zavisla cast bridge.
+
+
+10. Transportni backendy
+------------------------
+
+
+10.1 FreeRTOS - ESP-IDF
+-----------------------
+
+Includes:
+
+    #include "freertos/FreeRTOS.h"
+    #include "freertos/queue.h"
+
+Pouzitelne pro ESP-IDF.
+
+
+10.2 FreeRTOS - standard
+------------------------
+
+Includes:
+
+    #include "FreeRTOS.h"
+    #include "queue.h"
+
+Pouzitelne pro STM32 projekty s nativnim FreeRTOS API.
+
+
+10.3 CMSIS-RTOS2
+----------------
+
+Pouzit:
+
+    osMessageQueueId_t
+    osMessageQueueNew()
+    osMessageQueuePut()
+    osMessageQueueGet()
+
+Verejne UiEvents_* a AppCmds_* API zustane stejne.
+
+
+10.4 Custom
+-----------
+
+EEZ jednorazove vytvori pouze platformni scaffold. Uzivatel muze dodat:
+
+    - bare-metal ring buffer,
+    - vlastni scheduler,
+    - jiny RTOS,
+    - jinou synchronizaci.
+
+
+11. Prenositelny UI engine
+--------------------------
+
+ui_engine.generated.c ma zaviset pouze na:
+
+    - standardnim C,
+    - LVGL,
+    - generovanem screens.h,
+    - ui_screen_registry,
+    - ui_message_bus API.
+
+Nesmi obsahovat:
+
+    - ESP-IDF API,
+    - STM32 HAL API,
+    - FreeRTOS API,
+    - CMSIS API.
+
+Cas muze merit pres:
+
+    lv_tick_get()
+    lv_tick_elaps()
+
+Zakladni LVGL timer muze bezet napr. kazdych 20 ms. Controller Update() se vola
+jen tehdy, kdyz uplynula jeho vlastni update_period_ms.
+
+Init API:
+
+    void UiEngine_Init(void);
+    void UiEngine_Start(void);
+
+UiEngine_Init():
+
+    - inicializuje message bus,
+    - registruje generated EEZ lifecycle callback,
+    - registruje generated EEZ screen tick callback.
+
+UiEngine_Start():
+
+    - pripoji uz aktivni screen,
+    - vytvori LVGL timer.
+
+
+12. APP command handler
+-----------------------
+
+app_ui_commands.c je user-owned, protoze obsahuje projektovou APP logiku.
+
+EEZ jednorazove vytvori:
+
+    void AppUiCommands_Process(void)
+    {
+        app_command_t command;
+
+        while (AppCmds_Receive(&command)) {
+            switch (command.id) {
+            default:
+                break;
+            }
+        }
+    }
+
+Volani handleru zustava odpovednosti aplikace:
+
+ESP:
+
+    AppUiCommands_Process() v IoMan/APP tasku na core 0.
+
+STM32:
+
+    AppUiCommands_Process() v APP tasku nebo hlavni smycce.
+
+EEZ nesmi rozhodovat, ze ktereho tasku se APP handler vola.
+
+
+13. Controller scaffold
+-----------------------
+
+Pro novy Main screen EEZ jednorazove vytvori:
+
+    #include "main_screen_controller.h"
+
+    // ------------------------------------------------------------------------------------------------
+
+    void MainScreen_Enter(void)
+    {
+    }
+
+    // ------------------------------------------------------------------------------------------------
+
+    void MainScreen_Update(uint32_t elapsed_ms)
+    {
+        (void)elapsed_ms;
+    }
+
+    // ------------------------------------------------------------------------------------------------
+
+    void MainScreen_OnAppEvent(const ui_event_t *event)
+    {
+        if (event == NULL) {
+            return;
+        }
+
+        switch (event->id) {
+        default:
+            break;
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------
+
+    void MainScreen_Leave(void)
+    {
+    }
+
+Vsechny struktury, skupiny dat a funkce v MEP generovanem/scaffold kodu maji
+byt oddeleny jednotnym oddelovacem:
+
+    // ------------------------------------------------------------------------------------------------
+
+
+14. UI actions a commandy
+-------------------------
+
+V prvni fazi uzivatel stale implementuje native EEZ/LVGL action callback:
+
+    void action_set_gpio18(lv_event_t *event)
+    {
+        (void)event;
+
+        const app_command_t command = {
+            .id = APP_CMD_SET_GPIO18,
+            .data.state = true,
+        };
+
+        (void)AppCmds_Post(&command);
+    }
+
+Callback nesmi primo volat Dio, VarStore, sit, OTA ani jinou APP sluzbu.
+
+
+15. Pozdejsi message catalog
+----------------------------
+
+Ve druhe fazi lze do EEZ pridat katalog:
+
+    App/UI Bridge
+        APP commands
+            SET_GPIO18
+            SET_BRIGHTNESS
+            SAVE_CONFIG
+
+        UI events
+            GPIO18_CHANGED
+            BRIGHTNESS_CHANGED
+            CONFIG_SAVED
+
+Kazda zprava muze mit payload type:
+
+    None
+    bool
+    int32
+    uint32
+    float
+    custom
+
+Potom lze ui_messages.generated.h generovat kompletne a validovat:
+
+    - duplicitni ID/nazvy,
+    - neplatne C identifikatory,
+    - kolize APP_CMD_ a UI_EVENT_ namespace,
+    - nepodporovany payload.
+
+Tato faze vyzaduje novy serializovany EEZ project model a migraci starsich
+.eez-project souboru. Neni nutna pro prvni funkcni verzi.
+
+
+16. Pozdejsi EEZ action "Send APP command"
+------------------------------------------
+
+Ve treti fazi lze pridat LVGL action type:
+
+    Send APP command
+
+Editor umozni vybrat:
+
+    Command: APP_CMD_SET_GPIO18
+    Payload: checked state / value / text / constant
+
+Generator pak automaticky vytvori callback:
+
+    app_command_t command = {
+        .id = APP_CMD_SET_GPIO18,
+        .data.state = lv_obj_has_state(target, LV_STATE_CHECKED),
+    };
+
+    AppCmds_Post(&command);
+
+Tato faze zavisi na message catalogu z faze 2.
+
+
+17. Build integrace
+-------------------
+
+EEZ muze generovat:
+
+    ui_app/generated/ui_bridge_sources.cmake
+    ui_app/generated/ui_bridge_sources.mk
+
+ESP-IDF projekt pak jednorazove pouzije:
+
+    include(ui_app/generated/ui_bridge_sources.cmake)
+
+STM32CubeIDE obvykle kompiluje zdroje ve stromu automaticky. Pro vlastni
+Make/CMake lze pouzit generated source list.
+
+EEZ nesmi automaticky prepisovat:
+
+    - aplikacni CMakeLists.txt,
+    - STM32 .ioc,
+    - STM32CubeIDE project metadata,
+    - rucni Makefile.
+
+
+18. Doporucene misto implementace ve forku
+------------------------------------------
+
+Nevkladat cely generator do uz velmi rozsahleho:
+
+    packages/project-editor/lvgl/build.ts
+
+Vytvorit novy modul:
+
+    packages/project-editor/lvgl/app-ui-bridge-codegen.ts
+
+Odpovednosti modulu:
+
+    - nacteni bridge settings,
+    - vytvoreni screen metadata,
+    - generated registry,
+    - portable UI engine,
+    - dispatcher,
+    - transport backend/scaffold,
+    - vytvoreni chybejicich user controlleru,
+    - vytvoreni ui_messages.h a app_ui_commands.* pouze pokud chybi,
+    - vlastni bezpecny generated manifest,
+    - warnings pro orphan user controllery.
+
+Do:
+
+    packages/project-editor/project/project.tsx
+
+pridat Build properties, defaulty v beforeLoadHook a observables v
+makeEditable().
+
+Z hlavniho build procesu po standardnim LVGL exportu zavolat priblizne:
+
+    if (project.settings.build.generateAppUiBridge) {
+        await generateAppUiBridge(project, options);
+    }
+
+Generator musi pouzit stejny prevod EEZ screen nazvu na C identifikatory jako
+stavadici LVGL generator. Nevytvaret druhou, mirne odlisnou implementaci
+sanitizace nazvu.
+
+
+19. Doporucene faze implementace
+--------------------------------
+
+
+Faze 1 - prakticke minimum
+--------------------------
+
+    - Generate App/UI bridge switch.
+    - Samostatny bridge output folder.
+    - Generated engine, dispatcher a registry.
+    - Per-screen update period nebo alespon globalni default.
+    - Jednorazove user screen controllery.
+    - Jednorazovy ui_messages.h.
+    - Jednorazovy app_ui_commands.c/h.
+    - FreeRTOS ESP-IDF backend.
+    - Standard FreeRTOS backend.
+    - CMSIS-RTOS2 backend.
+    - Custom backend scaffold.
+    - Samostatny bezpecny manifest pouze pro generated/.
+    - Source list pro CMake/Make.
+
+Po teto fazi uz nebude nutne rucne vytvaret celou bridge strukturu.
+
+
+Faze 2 - message catalog
+------------------------
+
+    - APP commandy a UI eventy editovatelne v EEZ.
+    - Typovane payloady.
+    - Generated message contract.
+    - Validace nazvu a kolizi.
+    - Migrace starsich projektu.
+
+
+Faze 3 - action bindings
+------------------------
+
+    - EEZ action Send APP command.
+    - Vyber commandu z katalogu.
+    - Mapovani widget checked/value/text payloadu.
+    - Automaticke generovani callbacku.
+
+
+20. Akceptacni kriteria faze 1
+------------------------------
+
+    1. Vypnuty bridge nema zmenit standardni EEZ output.
+
+    2. Zapnuty bridge vygeneruje vsechny generated soubory a chybejici
+       user-owned scaffolds.
+
+    3. Druhy export nezmeni obsah zadneho user-owned souboru.
+
+    4. Odstraneni screenu nesmaze jeho user controller.
+
+    5. Orphan cleanup nikdy nesmi mazat mimo ui_app/generated.
+
+    6. Registry se automaticky aktualizuje po pridani/odebrani screenu.
+
+    7. update_period_ms == 0 vypne periodicky Update().
+
+    8. APP -> UI event se doruci jen controlleru aktivniho screenu a pouze
+       v LVGL kontextu.
+
+    9. UI -> APP command se pouze vlozi do transportu. APP vykonny kod se
+       nespousti z LVGL callbacku.
+
+   10. Stejny generated engine se prelozi pro ESP-IDF i STM32.
+
+   11. FreeRTOS ESP-IDF, FreeRTOS standard a CMSIS backend maji shodne
+       verejne UiEvents_* / AppCmds_* API.
+
+   12. V generated i scaffold kodu se pouzivaji APP_CMD_* konstanty a
+       jednotne radkove oddelovace.
+
+
+21. Overeni implementace
+------------------------
+
+Minimalni testovaci matice:
+
+    - TypeScript compile.
+    - Gulp/release build.
+    - Headless export projektu s bridge vypnutym.
+    - Headless export projektu s bridge zapnutym.
+    - Druhy export po rucni uprave controlleru; soubor musi zustat byte-identical.
+    - Pridani druheho screenu.
+    - Prejmenovani screenu.
+    - Odstraneni screenu.
+    - Pokus o orphan cleanup s cestou obsahujici ../.
+    - ESP-IDF C build s FreeRTOS ESP backendem.
+    - STM32 ARM GCC syntax/build se standard FreeRTOS backendem.
+    - STM32 build s CMSIS-RTOS2 backendem.
+    - Custom backend syntax check.
+
+
+22. Dulezite souvisejici soubory
+--------------------------------
+
+    packages/project-editor/lvgl/build.ts
+        Existujici LVGL screen runtime a screen identifier logika.
+
+    packages/project-editor/project/project.tsx
+        Build settings, defaults a observable properties.
+
+    packages/project-editor/build/build.ts
+        Hlavni build flow, writeTextFile tracking a orphan manifest.
+
+    packages/project-editor/build/assets.ts
+        LVGL generated sections a LVGLBuild instance.
+
+    handover_eez_screen_runtime_codegen.md
+        Popis existujiciho screen runtime codegenu.
+
+    handover_eez_nested_objects_patch.md
+        Popis nested object structs implementace.
+
+
+23. Finalni doporuceni
+----------------------
+
+Implementovat nejprve pouze fazi 1.
+
+Nejvetsi okamzity prinos:
+
+    - uzivatel nemusi zakladat bridge strukturu rucne,
+    - pridani screenu automaticky aktualizuje registry,
+    - lifecycle a periodicky update jsou generovane konzistentne,
+    - APP a UI zustanou striktne oddelene,
+    - uzivatelsky kod prezije libovolny pocet EEZ exportu,
+    - stejna architektura funguje na ESP32 i STM32.
+
+Message catalog a automaticke Send APP command action bindings jsou vhodne
+navazujici faze, ale nemaji blokovat prvni prakticky pouzitelnou implementaci.

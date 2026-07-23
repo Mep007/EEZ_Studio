@@ -6,6 +6,47 @@ Goal
 ----
 Create a Windows NSIS installer / EXE build for the local MEP fork.
 
+Latest build - MEP FORK v1.0.3
+--------------------------------
+
+Build date:
+
+    2026-07-23
+
+Versioned installer:
+
+    dist\mep-fork-v1.0.3\EEZ Studio MEP FORK v1.0.3 Setup.exe
+
+Size:
+
+    129372940 bytes
+
+SHA256:
+
+    F1A4F00AC83484367EB3F4F842698C974184FFFCAF13F5B1B90064E399C8139B
+
+Signature:
+
+    NotSigned
+
+The upstream package version remains 0.28.0, so electron-builder also creates:
+
+    dist\mep-fork-v1.0.3\EEZ Studio Setup 0.28.0.exe
+
+Both EXE files are byte-identical. The MEP fork release is shown by the
+application itself as:
+
+    MEP FORK v1.0.3 - EEZ Studio
+
+The packaged app.asar was checked for:
+
+    MEP FORK v1.0.3
+    UI_BRIDGE_USER_API_VERSION compatibility checks
+
+The output directory was overridden to dist\mep-fork-v1.0.3 because Visual
+Studio Code held a read lock on the previous dist\win-unpacked\resources\
+app.asar. No running editor process was terminated.
+
 Final artifact
 --------------
 Created installer:
@@ -155,4 +196,3 @@ configured so electron-builder can unpack winCodeSign normally, then build
 without:
 
     --config.win.signAndEditExecutable=false
-

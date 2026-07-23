@@ -278,6 +278,19 @@ export class Build extends EezObject {
     lvglInclude: string;
     screensLifetimeSupport: boolean;
     screenObjectStructs: boolean;
+    generateAppUiBridge: boolean;
+    appUiBridgeOutputFolder: string;
+    appUiBridgeApplicationOutputFolder: string;
+    appUiBridgeTransport:
+        | "custom"
+        | "freertos-esp-idf"
+        | "freertos"
+        | "cmsis-rtos2";
+    appUiBridgeDefaultUpdatePeriod: number;
+    appUiBridgeGenerateMissingUserFiles: boolean;
+    appUiBridgeUiEventQueueLength: number;
+    appUiBridgeAppCommandQueueLength: number;
+    appUiBridgeMaxEventsPerTick: number;
     generateSourceCodeForEezFramework: boolean;
     compressFlowDefinition: boolean;
     executionQueueSize: number;
@@ -377,6 +390,89 @@ export class Build extends EezObject {
                 disabled: isNotLVGLProject
             },
             {
+                name: "generateAppUiBridge",
+                displayName: "Generate App/UI bridge",
+                checkboxStyleSwitch: true,
+                type: PropertyType.Boolean,
+                disabled: isNotLVGLProject
+            },
+            {
+                name: "appUiBridgeOutputFolder",
+                displayName: "App/UI bridge output folder",
+                type: PropertyType.RelativeFolder,
+                disabled: (object: Build) =>
+                    isNotLVGLProject(object) || !object.generateAppUiBridge
+            },
+            {
+                name: "appUiBridgeApplicationOutputFolder",
+                displayName: "Application handler output folder",
+                type: PropertyType.RelativeFolder,
+                disabled: (object: Build) =>
+                    isNotLVGLProject(object) || !object.generateAppUiBridge
+            },
+            {
+                name: "appUiBridgeTransport",
+                displayName: "Bridge transport",
+                type: PropertyType.Enum,
+                enumItems: [
+                    {
+                        id: "custom",
+                        label: "Custom"
+                    },
+                    {
+                        id: "freertos-esp-idf",
+                        label: "FreeRTOS - ESP-IDF includes"
+                    },
+                    {
+                        id: "freertos",
+                        label: "FreeRTOS - standard includes"
+                    },
+                    {
+                        id: "cmsis-rtos2",
+                        label: "CMSIS-RTOS2"
+                    }
+                ],
+                enumDisallowUndefined: true,
+                disabled: (object: Build) =>
+                    isNotLVGLProject(object) || !object.generateAppUiBridge
+            },
+            {
+                name: "appUiBridgeDefaultUpdatePeriod",
+                displayName: "Default screen update period",
+                type: PropertyType.Number,
+                disabled: (object: Build) =>
+                    isNotLVGLProject(object) || !object.generateAppUiBridge
+            },
+            {
+                name: "appUiBridgeGenerateMissingUserFiles",
+                displayName: "Generate missing user files",
+                checkboxStyleSwitch: true,
+                type: PropertyType.Boolean,
+                disabled: (object: Build) =>
+                    isNotLVGLProject(object) || !object.generateAppUiBridge
+            },
+            {
+                name: "appUiBridgeUiEventQueueLength",
+                displayName: "UI event queue length",
+                type: PropertyType.Number,
+                disabled: (object: Build) =>
+                    isNotLVGLProject(object) || !object.generateAppUiBridge
+            },
+            {
+                name: "appUiBridgeAppCommandQueueLength",
+                displayName: "APP command queue length",
+                type: PropertyType.Number,
+                disabled: (object: Build) =>
+                    isNotLVGLProject(object) || !object.generateAppUiBridge
+            },
+            {
+                name: "appUiBridgeMaxEventsPerTick",
+                displayName: "Maximum UI events per tick",
+                type: PropertyType.Number,
+                disabled: (object: Build) =>
+                    isNotLVGLProject(object) || !object.generateAppUiBridge
+            },
+            {
                 name: "useDockerDesktop",
                 displayName: "Use Docker Desktop for full simulator",
                 checkboxStyleSwitch: true,
@@ -453,6 +549,42 @@ export class Build extends EezObject {
                 jsObject.screenObjectStructs = false;
             }
 
+            if (jsObject.generateAppUiBridge == undefined) {
+                jsObject.generateAppUiBridge = false;
+            }
+
+            if (jsObject.appUiBridgeOutputFolder == undefined) {
+                jsObject.appUiBridgeOutputFolder = "../ui_app";
+            }
+
+            if (jsObject.appUiBridgeApplicationOutputFolder == undefined) {
+                jsObject.appUiBridgeApplicationOutputFolder = "../app";
+            }
+
+            if (jsObject.appUiBridgeTransport == undefined) {
+                jsObject.appUiBridgeTransport = "custom";
+            }
+
+            if (jsObject.appUiBridgeDefaultUpdatePeriod == undefined) {
+                jsObject.appUiBridgeDefaultUpdatePeriod = 100;
+            }
+
+            if (jsObject.appUiBridgeGenerateMissingUserFiles == undefined) {
+                jsObject.appUiBridgeGenerateMissingUserFiles = true;
+            }
+
+            if (jsObject.appUiBridgeUiEventQueueLength == undefined) {
+                jsObject.appUiBridgeUiEventQueueLength = 16;
+            }
+
+            if (jsObject.appUiBridgeAppCommandQueueLength == undefined) {
+                jsObject.appUiBridgeAppCommandQueueLength = 16;
+            }
+
+            if (jsObject.appUiBridgeMaxEventsPerTick == undefined) {
+                jsObject.appUiBridgeMaxEventsPerTick = 8;
+            }
+
             if (jsObject.useDockerDesktop == undefined) {
                 jsObject.useDockerDesktop = true;
             }
@@ -493,6 +625,15 @@ export class Build extends EezObject {
             lvglInclude: observable,
             screensLifetimeSupport: observable,
             screenObjectStructs: observable,
+            generateAppUiBridge: observable,
+            appUiBridgeOutputFolder: observable,
+            appUiBridgeApplicationOutputFolder: observable,
+            appUiBridgeTransport: observable,
+            appUiBridgeDefaultUpdatePeriod: observable,
+            appUiBridgeGenerateMissingUserFiles: observable,
+            appUiBridgeUiEventQueueLength: observable,
+            appUiBridgeAppCommandQueueLength: observable,
+            appUiBridgeMaxEventsPerTick: observable,
             useDockerDesktop: observable,
             generateSourceCodeForEezFramework: observable,
             compressFlowDefinition: observable,

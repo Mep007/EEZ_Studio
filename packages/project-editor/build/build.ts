@@ -36,6 +36,7 @@ import {
 import { buildAssets } from "project-editor/build/assets";
 import { buildScpi } from "project-editor/build/scpi";
 import { generateSourceCodeForEezFramework } from "project-editor/lvgl/build";
+import { generateAppUiBridge } from "project-editor/lvgl/app-ui-bridge-codegen";
 import { cleanupSourceFile } from "project-editor/build/cleanup-c-source-files";
 import { generateSourceCodeForEezGuiLite } from "project-editor/eez-gui-lite/build";
 
@@ -638,6 +639,10 @@ export async function build(
 
             // Disable tracking after file generation
             disableBuildTracking();
+
+            if (project.projectTypeTraits.isLVGL) {
+                await generateAppUiBridge(projectStore);
+            }
         } else {
             const baseName = path.basename(
                 projectStore.filePath || "",
