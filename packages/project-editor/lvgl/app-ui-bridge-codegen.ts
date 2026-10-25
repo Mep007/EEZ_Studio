@@ -1137,6 +1137,9 @@ static void ui_engine_dispatch_events(
             break;
         }
         controller->on_event(&event);
+        if (!ui_engine_started || ui_screen_get_active() != controller->id) {
+            break;
+        }
     }
 }
 
@@ -1203,7 +1206,7 @@ bool UiEngine_Start(void)
         ui_engine_enter_controller(screen_id);
     }
 
-    return true;
+    return ui_engine_started;
 }
 
 void UiEngine_Stop(void)
@@ -1248,13 +1251,23 @@ void UiEngine_Tick(void)
     }
 
     if (active_controller_id != screen_id) {
+        ui_engine_leave_controller(active_controller_id);
+        if (!ui_engine_started || ui_screen_get_active() != screen_id) {
+            return;
+        }
         ui_engine_enter_controller(screen_id);
+    }
+
+    if (!ui_engine_started || ui_screen_get_active() != screen_id) {
+        return;
     }
 
     const ui_screen_controller_t *controller =
         ui_screen_registry_find(screen_id);
     ui_engine_dispatch_events(controller);
-    ui_engine_update_controller(controller);
+    if (ui_engine_started && ui_screen_get_active() == screen_id) {
+        ui_engine_update_controller(controller);
+    }
 }
 
 bool UiEngine_IsInitialized(void)

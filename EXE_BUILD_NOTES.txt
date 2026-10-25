@@ -6,7 +6,16 @@ Goal
 ----
 Create a Windows NSIS installer / EXE build for the local MEP fork.
 
-Latest build - MEP FORK v1.0.3
+Latest build - MEP FORK v1.1.0 (2026-10-25)
+-----------------------------------------
+Branch: mesp-lvgl-codegen-v0.29
+Upstream: v0.29.0
+Release details and current build instructions: MEP_FORK_1.1.0_RELEASE.txt
+Installer: dist\mep-fork-v1.1.0\EEZ Studio MEP FORK v1.1.0 Setup.exe
+The previous installations and release artifacts were not replaced.
+
+
+Previous build - MEP FORK v1.0.3
 --------------------------------
 
 Build date:

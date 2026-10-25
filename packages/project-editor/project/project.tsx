@@ -384,7 +384,7 @@ export class Build extends EezObject {
             },
             {
                 name: "screenObjectStructs",
-                displayName: "Nested object structs (experimental)",
+                displayName: "Nested object structs (experimental, EEZ Flow off)",
                 checkboxStyleSwitch: true,
                 type: PropertyType.Boolean,
                 disabled: isNotLVGLProject

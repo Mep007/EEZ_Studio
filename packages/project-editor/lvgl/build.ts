@@ -247,6 +247,15 @@ export class LVGLBuild extends Build {
     }
 
     finalizeObjectAccessibleFromSourceCodeTable() {
+        if (
+            this.useScreenObjectStructs &&
+            this.project.projectTypeTraits.hasFlowSupport
+        ) {
+            throw new Error(
+                "Nested object structs require a native LVGL project (EEZ Flow disabled). " +
+                    "The Flow runtime requires a flat screen/object table."
+            );
+        }
         let genIndex = 0;
 
         function generateUniqueObjectName() {
@@ -394,6 +403,24 @@ export class LVGLBuild extends Build {
             return identifier;
         };
 
+        const getUserWidgetIdentifiers = (page: Page): Identifiers => {
+            const existing = this.lvglObjectIdentifiers.fromUserWidgets.get(page);
+            if (existing) {
+                return existing;
+            }
+            const identifiers: Identifiers = {
+                identifiers: [],
+                entries: [],
+                objectStructRoots: new Map(),
+                widgetToIdentifier: new Map(),
+                widgetToAccessor: new Map(),
+                widgetToIndex: new Map()
+            };
+            this.lvglObjectIdentifiers.fromUserWidgets.set(page, identifiers);
+            addIdentifiersForUserWidget("", page, identifiers);
+            return identifiers;
+        };
+
         const getWidgetIdentifier = (widget: LVGLWidget) => {
             let identifier;
 
@@ -482,7 +509,9 @@ export class LVGLBuild extends Build {
                 while (parentWidget) {
                     if (
                         this.isObjectStructWidget(parentWidget) &&
-                        parentWidget.identifier
+                        (parentWidget.identifier ||
+                            parentWidget instanceof
+                                ProjectEditor.LVGLUserWidgetWidgetClass)
                     ) {
                         return ensureNode(parentWidget);
                     }
@@ -532,6 +561,51 @@ export class LVGLBuild extends Build {
                     screenIdentifier
                 );
 
+                if (
+                    widget instanceof ProjectEditor.LVGLUserWidgetWidgetClass
+                ) {
+                    const userPage = widget.userWidgetPage;
+                    if (userPage && !widget.isCycleDetected) {
+                        const identifiers = getUserWidgetIdentifiers(userPage);
+                        if (identifiers.identifiers.length > 0) {
+                            const member = getUniqueFieldIdentifier(
+                                node,
+                                "user_widget"
+                            );
+                            const storage: ObjectStructNode = {
+                                typeIdentifier: `${node.typeIdentifier.replace(/_objects$/, "")}_${member}_objects`,
+                                memberIdentifier: member,
+                                objectFieldIdentifier: identifiers.identifiers[0],
+                                accessorPrefix: `${node.accessorPrefix}.${member}`,
+                                fields: [],
+                                usedFieldIdentifiers: new Set()
+                            };
+                            storage.fields = identifiers.identifiers.map(
+                                identifier => ({
+                                    identifier: getUniqueFieldIdentifier(
+                                        storage,
+                                        identifier
+                                    )
+                                })
+                            );
+                            node.fields.push({
+                                identifier: member,
+                                childNode: storage
+                            });
+                            // UserWidget functions address a contiguous per-instance pointer span.
+                            for (const { identifier } of storage.fields) {
+                                pageIdentifiers.identifiers.push(
+                                    `${getWidgetIdentifier(widget)}${USER_WIDGET_IDENTIFIER_SEPARATOR}${identifier}`
+                                );
+                                pageIdentifiers.entries.push({
+                                    identifier,
+                                    objectStructGroupIdentifier: screenIdentifier
+                                });
+                            }
+                        }
+                    }
+                }
+
                 return node;
             };
 
@@ -540,7 +614,12 @@ export class LVGLBuild extends Build {
                     return;
                 }
 
-                if (this.isObjectStructWidget(widget) && widget.identifier) {
+                if (
+                    this.isObjectStructWidget(widget) &&
+                    (widget.identifier ||
+                        widget instanceof
+                            ProjectEditor.LVGLUserWidgetWidgetClass)
+                ) {
                     ensureNode(widget);
                     return;
                 }
@@ -572,6 +651,8 @@ export class LVGLBuild extends Build {
                 if (this.useScreenObjectStructs) {
                     addNestedPageIdentifiers(page, identifier);
                 }
+            } else if (this.useScreenObjectStructs) {
+                getUserWidgetIdentifiers(page);
             } else {
                 const widgets =
                     this.lvglObjectsAccessibleFromSourceCode.fromUserWidgets.get(
@@ -613,6 +694,36 @@ export class LVGLBuild extends Build {
                 "",
                 false
             );
+        } else {
+            // Forward references can discover children out of order. Indices must
+            // follow the actual C struct layout, including UserWidget storage.
+            const offsets = new Map<string, number>();
+            let offset = 0;
+            const visitNode = (node: ObjectStructNode) => {
+                for (const field of node.fields) {
+                    if (field.childNode) {
+                        visitNode(field.childNode);
+                    } else {
+                        offsets.set(
+                            `${node.accessorPrefix}.${field.identifier}`,
+                            offset++
+                        );
+                    }
+                }
+            };
+            for (const page of this.userPages) {
+                const root =
+                    this.lvglObjectIdentifiers.fromPage.objectStructRoots.get(
+                        page
+                    );
+                if (root) {
+                    visitNode(root);
+                }
+            }
+            const identifiers = this.lvglObjectIdentifiers.fromPage;
+            for (const [widget, accessor] of identifiers.widgetToAccessor) {
+                identifiers.widgetToIndex.set(widget, offsets.get(accessor)!);
+            }
         }
     }
 
@@ -665,7 +776,10 @@ export class LVGLBuild extends Build {
     }
 
     isObjectStructWidget(widget: LVGLWidget) {
-        return widget.children.length > 0;
+        return (
+            widget.children.length > 0 ||
+            widget instanceof ProjectEditor.LVGLUserWidgetWidgetClass
+        );
     }
 
     getParentLvglWidget(widget: LVGLWidget) {

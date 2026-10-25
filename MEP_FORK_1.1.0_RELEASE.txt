@@ -1,0 +1,122 @@
+EEZ Studio MEP Fork 1.1.0
+========================
+Date: 2026-10-25
+Branch: mesp-lvgl-codegen-v0.29
+Upstream baseline: v0.29.0, commit 3000161d
+Previous MEP branch tip: 3cdb0498 (MEP Fork 1.0.3)
+
+Version identity
+----------------
+The upstream package version remains 0.29.0. The independent MEP version is
+1.1.0 in packages/eez-studio-shared/mep-fork.ts and the editor's visible title.
+The Windows installer is named EEZ Studio MEP FORK v1.1.0 Setup.exe.
+The app ID and installation identity are intentionally unchanged.
+Installer size: 128577434 bytes
+SHA256: 28EC70FF0928F4FB794EE6237E2D32CD4B65EB48E9DA82CEC719145D39AFB1B6
+Signature: NotSigned
+
+Upstream integration
+--------------------
+Merged the exact upstream v0.29.0 tag, not the moving master branch.
+The merge was conflict-free. It includes upstream text-property changes,
+SQLite 12.8.0 and WASM-based LZ4 compression (the native lz4 dependency was
+removed). Electron remains 39.2.7. Existing MEP nested objects, screen runtime,
+theme helpers and App/UI bridge features are retained.
+
+MEP code fixes
+---------------
+1. Nested object structs now reserve a separate contiguous object-pointer
+   span for every reusable UserWidget instance. Previously the definition's
+   internal objects were missing from objects_t while its generated create,
+   tick and theme code still indexed those pointers. That could overwrite
+   unrelated widget pointers or run beyond the object table.
+
+   Example access paths after regeneration:
+       objects.main_light.main_light_container.main_light_quick_but_1.obj
+       objects.main_light.main_light_container.main_light_quick_but_1.user_widget.bq_label
+
+   The UserWidget's own additional children follow its reserved definition
+   storage. Recursive and anonymous instances are supported; empty definitions
+   do not produce zero-sized C structs. Repeated local field names are made
+   unique in the reserved storage without changing local numeric offsets.
+
+2. Numeric object indices are derived from the final nested C layout, not
+   discovery order. Forward references and later screens keep correct offsets.
+   The editor's object-path preview now points to a leaf UserWidget's .obj.
+
+3. Nested object structs combined with EEZ Flow are rejected with an explicit
+   generation error. EEZ Flow requires the legacy flat screen/object table.
+   Turn Flow off for native C with nested structs, or keep flat objects when
+   using Flow. There is no silent project conversion or changed Flow default.
+   Existing native UserWidget property semantics are unchanged; this release
+   does not add automatic native parameter binding or firmware migration.
+
+4. Generated UiEngine stops dispatching/updating the old screen when an event
+   callback navigates or stops the engine. A fallback screen transition calls
+   Leave before Enter and respects navigation/Stop from those callbacks.
+   Start reports failure if an Enter callback stopped the engine.
+   The public bridge API version remains 0x00010003U (no contract change).
+
+5. Codegen test outputs and build logs are excluded from installer packaging.
+
+Verification
+-------------
+Run in a C compiler environment (MSVC Developer PowerShell on Windows):
+
+    npm.cmd run test:mep
+    node node_modules/typescript/bin/tsc --noEmit
+
+All nine tests passed, including compilation and execution of the actual
+generated C engine. Tests cover repeated/recursive/empty/anonymous widgets,
+layout ordering, legacy flat output, Flow rejection, duplicate local names,
+editor object paths and bridge lifecycle/navigation/Stop behavior.
+
+Real-project export smoke test, after building the editor:
+
+    node tools/tests/lvgl-export-smoke.cjs <native-project.eez-project>
+
+This copies the input into build/codegen-tests/export and redirects all output
+and editor profile data there. It never overwrites the original project or
+its generated firmware files. The test runs the built source editor, verifies
+UserWidget spans/theme index bounds, and compiles C sizeof/offsetof assertions.
+MESP602 exported without errors or warnings: 92 pointer slots, seven instances.
+Set EEZ_SMOKE_EXECUTABLE to the unpacked release's EEZ Studio.exe to run the
+same export check against the packaged editor instead of the source build.
+The packaged editor passed this check too. Its ASAR archive was checked for
+the correct fork/upstream identity and absence of codegen test outputs/logs.
+This is generator/host-C validation, not a complete ESP-IDF firmware build or
+a hardware test of a regenerated thermostat application.
+
+Windows build notes
+--------------------
+Validated with Node 22.21.1, Electron 39.2.7 and Visual Studio 18 Community.
+See EXE_BUILD_NOTES.txt for the local node-gyp VS18/v145 workaround. It lives
+only in ignored node_modules and must be reapplied after npm ci. On this
+machine the Developer PowerShell entry point is:
+
+    C:/Program Files/Microsoft Visual Studio/18/Community/Common7/Tools/Launch-VsDevShell.ps1
+
+Native dependencies were rebuilt with npm rebuild --foreground-scripts.
+Production source, CSS, WASM and image-converter copies were built using the
+individual npm build scripts. Avoid putting worktrees/temporary repositories
+inside build: the normal clean-build command removes that entire directory.
+
+Installer command (after make-electron-builder-yml):
+
+    $env:CSC_IDENTITY_AUTO_DISCOVERY = 'false'
+    $env:CI = 'false'
+    .\node_modules\.bin\electron-builder.cmd --config electron-builder.yml --config.win.signAndEditExecutable=false --config.directories.output=dist/mep-fork-v1.1.0 --config.artifactName="EEZ Studio MEP FORK v1.1.0 Setup.exe" --publish never
+
+The installer is unsigned, intended for local testing, and was not installed
+over the existing editor. No firmware was flashed and no Git remote was pushed.
+
+Remaining considerations
+------------------------
+- Regenerate the firmware UI and adapt application accessors to the new nested
+  UserWidget fields. Do not mix headers and sources from different exports.
+- Initialize the message bus before starting concurrent producer tasks. The
+  bridge queues are nonblocking task-context APIs, not ISR APIs.
+- Follow-up candidate: make bridge diagnostic counters atomic for multiple
+  producers. This is separate from the transport's queue synchronization.
+- Upstream dependency audit findings remain; dependencies were not broadly
+  upgraded with npm audit fix. This is not a dependency-security release.

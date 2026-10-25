@@ -184,7 +184,10 @@ function getLvglGeneratedObjectPath(widget: LVGLWidget) {
 
     const objectPath = `objects.${screenIdentifier}.${pathSegments.join(".")}`;
 
-    return widget.children.length > 0 ? `${objectPath}.obj` : objectPath;
+    return widget.children.length > 0 ||
+        widget instanceof ProjectEditor.LVGLUserWidgetWidgetClass
+        ? `${objectPath}.obj`
+        : objectPath;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

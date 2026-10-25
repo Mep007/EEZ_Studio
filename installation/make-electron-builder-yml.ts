@@ -57,6 +57,8 @@ const productName = "EEZ Studio";
 
 let files = [
     "build/**",
+    "!build/codegen-tests/**",
+    "!build/**/*.log",
     "libs/**",
     "help/**",
     "icon.icns",

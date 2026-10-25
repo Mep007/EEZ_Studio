@@ -9,6 +9,7 @@
     "repository": "https://github.com/eez-open/studio",
     "main": "build/main/main.js",
     "scripts": {
+        "test:mep": "node --test tools/tests/lvgl-nested-user-widgets.test.cjs tools/tests/ui-bridge-runtime.test.cjs",
         "postinstall": "electron-rebuild",
         "start": "electron --trace-warnings --trace-deprecation .",
         "clean-build": "npx rimraf@^3.0.2 build",
