@@ -1093,12 +1093,13 @@ export class BuildLVGLCode implements LVGLCode {
         declName: string,
         variableName: string
     ) {
+        const nativeProperty = this.build.getNativeBooleanPropertyValue(this.build.currentPage, variableName);
         this.build.line(
             `${declType}${
                 declType.endsWith("*") ? "" : " "
-            }${declName} = ${this.build.getVariableGetterFunctionName(
+            }${declName} = ${nativeProperty ?? `${this.build.getVariableGetterFunctionName(
                 variableName
-            )}();`
+            )}()`};`
         );
         return declName;
     }

@@ -1400,11 +1400,36 @@ export class LVGLBuild extends Build {
     getUserWidgetStateParam(userWidget: LVGLUserWidgetWidget) {
         const userWidgetStateVarName =
             this.getUserWidgetStateVarName(userWidget);
-        if (!userWidgetStateVarName) {
-            return "";
+        let params = userWidgetStateVarName ? `, &state->${userWidgetStateVarName}` : "";
+        if (!this.project.projectTypeTraits.hasFlowSupport) {
+            const page = this.pages.find(page => page.isUsedAsUserWidget && page.name === userWidget.userWidgetPageName);
+            if (page) for (const property of page.userProperties || []) {
+                if (property.type !== "boolean" || property.assignable) continue;
+                const value = userWidget.userPropertyValues?.values?.[property.id]?.trim() || "false";
+                const local = this.getNativeBooleanPropertyValue(this.currentPage, value);
+                const global = this.project.variables.globalVariables.find(variable => variable.name === value && variable.type === "boolean");
+                const expression = local ?? (value === "true" || value === "false" ? value :
+                    global ? `${this.getVariableGetterFunctionName(value)}()` : undefined);
+                if (expression === undefined) throw new Error(`Unsupported native boolean property ${page.name}.${property.name}: ${value}`);
+                params += `, ${expression}`;
+            }
         }
+        return params;
+    }
 
-        return `, &state->${userWidgetStateVarName}`;
+    getNativeBooleanPropertyValue(page: Page, value: string) {
+        if (this.project.projectTypeTraits.hasFlowSupport || !page?.isUsedAsUserWidget) return undefined;
+        const match = /^(!\s*)?([A-Za-z_][A-Za-z0-9_]*)$/.exec(value.trim());
+        if (!match) return undefined;
+        const property = page.userProperties?.find(property => property.name === match[2] && property.type === "boolean" && !property.assignable);
+        if (!property) return undefined;
+        return `${match[1] ? "!" : ""}${getName("prop_", property.name, NamingConvention.UnderscoreLowerCase)}`;
+    }
+
+    getNativeUserWidgetParams(page: Page) {
+        if (this.project.projectTypeTraits.hasFlowSupport) return "";
+        return (page.userProperties || []).filter(property => property.type === "boolean" && !property.assignable)
+            .map(property => `, bool ${getName("prop_", property.name, NamingConvention.UnderscoreLowerCase)}`).join("");
     }
 
     // Ensure that state vars are created in correct order.
@@ -1922,10 +1947,10 @@ export class LVGLBuild extends Build {
                     );
                 } else {
                     build.line(
-                        `void ${this.getScreenCreateFunctionName(page)}(lv_obj_t *parent_obj, int startWidgetIndex${this.stateVars.get(page) ? `, ${this.getStateStructName(page)} *state` : ""});`
+                        `void ${this.getScreenCreateFunctionName(page)}(lv_obj_t *parent_obj, int startWidgetIndex${this.stateVars.get(page) ? `, ${this.getStateStructName(page)} *state` : ""}${this.getNativeUserWidgetParams(page)});`
                     );
                     build.line(
-                        `void ${this.getScreenTickFunctionName(page)}(int startWidgetIndex${this.stateVars.get(page) ? `, ${this.getStateStructName(page)} *state` : ""});`
+                        `void ${this.getScreenTickFunctionName(page)}(int startWidgetIndex${this.stateVars.get(page) ? `, ${this.getStateStructName(page)} *state` : ""}${this.getNativeUserWidgetParams(page)});`
                     );
                 }
             } else {
@@ -2618,7 +2643,7 @@ export class LVGLBuild extends Build {
                     build.line(`(void)flowState;`);
                 } else {
                     build.blockStart(
-                        `void ${this.getScreenCreateFunctionName(page)}(lv_obj_t *parent_obj, int startWidgetIndex${this.stateVars.get(page) ? `, ${this.getStateStructName(page)} *state` : ""}) {`
+                        `void ${this.getScreenCreateFunctionName(page)}(lv_obj_t *parent_obj, int startWidgetIndex${this.stateVars.get(page) ? `, ${this.getStateStructName(page)} *state` : ""}${this.getNativeUserWidgetParams(page)}) {`
                     );
                 }
 
@@ -2736,7 +2761,7 @@ export class LVGLBuild extends Build {
                     build.line(`(void)flowState;`);
                 } else {
                     build.blockStart(
-                        `void ${this.getScreenTickFunctionName(page)}(int startWidgetIndex${this.stateVars.get(page) ? `, ${this.getStateStructName(page)} *state` : ""}) {`
+                        `void ${this.getScreenTickFunctionName(page)}(int startWidgetIndex${this.stateVars.get(page) ? `, ${this.getStateStructName(page)} *state` : ""}${this.getNativeUserWidgetParams(page)}) {`
                     );
                 }
                 build.line(`(void)startWidgetIndex;`);

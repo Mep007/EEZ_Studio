@@ -1,0 +1,81 @@
+EEZ Studio MEP Fork 1.1.1
+========================
+Date: 2026-10-25
+Branch: mesp-lvgl-codegen-v0.29
+Upstream baseline: v0.29.0, commit 3000161d
+
+Version identity
+----------------
+The upstream package version remains 0.29.0. The independent MEP version is
+1.1.1 in packages/eez-studio-shared/mep-fork.ts and the visible editor title.
+The Windows installer is named EEZ Studio MEP FORK v1.1.1 Setup.exe.
+The app ID, installation identity and existing editor settings are unchanged.
+Installer size: 128736606 bytes
+SHA256: B22AB5AED87740843C3A521FA51EE8C135B76743D1F2AE88C03A91FF9ED66851
+Signature: NotSigned
+
+Changes since MEP Fork 1.1.0
+----------------------------
+Native LVGL projects with EEZ Flow disabled can now pass read-only boolean
+UserWidget properties into generated create/tick functions. Values can be
+true/false literals, native global boolean variables, or boolean properties
+of an enclosing reusable widget. Local boolean reads support unary negation.
+Unsupported input expressions cause an explicit export error.
+
+Example: Button_quick defines show_toggle and show_mute. Its internal images
+use !show_toggle and !show_mute for the Hidden flag. Each instance can use its
+own literal or live native boolean binding. Repeated instances keep their own
+reserved object-pointer spans; theme, tick and application accessors stay valid.
+
+This is read-only boolean input support, not a general native expression engine.
+String, integer and assignable UserWidget properties are unchanged. Flow-based
+projects keep their existing property/parameter handling. Generated App/UI bridge
+API version remains unchanged. Existing 1.1.0 nested-object and lifecycle fixes
+are retained; upstream dependencies have not been broadly upgraded.
+
+Verification
+-------------
+Run in a C compiler environment (MSVC Developer PowerShell on Windows):
+
+    npm.cmd run test:mep
+    node node_modules/typescript/bin/tsc --noEmit
+    node tools/tests/lvgl-export-smoke.cjs <native-project.eez-project>
+
+The suite covers literal/live/outer boolean inputs, negation, explicit invalid
+expression errors, unchanged Flow behavior, nested object layout and generated
+C bridge lifecycle. The real MESP602 export smoke test compiles C offsetof/sizeof
+assertions for the nested object layout. To check the packaged executable, set
+EEZ_SMOKE_EXECUTABLE to dist/mep-fork-v1.1.1/win-unpacked/EEZ Studio.exe first.
+
+Release validation passed: production TypeScript build, all 10 regression tests
+including compiled C bridge lifecycle, production-source and packaged-executable
+MESP602 exports (115 pointer slots, seven instances, compiled C offsets). ASAR
+contents confirm MEP 1.1.1 / upstream 0.29.0, the updated boolean generator and
+absence of codegen test outputs/build logs. Installer creation completed with
+exit code 0.
+
+Packaging
+----------
+Build production sources with npm run build-src. CSS, WASM, image converter and
+builder configuration can be rebuilt using the individual package.json scripts.
+Do not run clean-dist when retaining earlier release artifacts.
+
+Windows installer command:
+
+    $env:CSC_IDENTITY_AUTO_DISCOVERY = 'false'
+    $env:CI = 'false'
+    .\node_modules\.bin\electron-builder.cmd --win nsis --x64 --config electron-builder.yml --config.win.signAndEditExecutable=false --config.directories.output=dist/mep-fork-v1.1.1 --config.artifactName="EEZ Studio MEP FORK v1.1.1 Setup.exe" --publish never
+
+The installer is unsigned. Disabling executable signing/editing also avoids the
+winCodeSign archive's macOS symlink extraction privilege requirement on this
+Windows machine. No existing editor is replaced or closed by packaging. No Git
+remote publication or installation is performed automatically.
+
+Local installation
+-------------------
+Installed on the user's explicit request after they uninstalled 1.1.0. No EEZ
+process was running. The NSIS installer completed silently with exit code 0 at:
+    C:/Users/merva/AppData/Local/Programs/eezstudio/EEZ Studio.exe
+The installed ASAR exactly matches the verified release. Export from the actual
+installed executable also passed the MESP602 smoke/compiled-offset checks.
+No thermostat firmware was flashed as part of this release/install task.

@@ -217,3 +217,33 @@ test('editor object path preview uses the UserWidget root pointer, not its struc
     const instance = new UserWidget('quick', main, main.lvglScreenWidget, button);
     assert.equal(context.getLvglGeneratedObjectPath(instance), 'objects.main.quick.obj');
 });
+
+test('native boolean UserWidget inputs pass literals, live getters and outer inputs', () => {
+    const main = page('main'), button = page('button', true), outer = page('outer', true);
+    button.userProperties = [
+        {id:'toggle', name:'show_toggle', type:'boolean'},
+        {id:'mute', name:'show_mute', type:'boolean'},
+        {id:'name', name:'label', type:'string'},
+    ];
+    outer.userProperties = [{id:'visible', name:'enabled', type:'boolean'}];
+    const instance = new UserWidget('quick', main, main.lvglScreenWidget, button);
+    instance.userWidgetPageName = 'button';
+    instance.userPropertyValues = {values:{toggle:'true', mute:'aux_muted'}};
+    const build = createBuild([main, button, outer], [main.lvglScreenWidget, instance], new Map([[button, []], [outer, []]]));
+    build.project.variables = {globalVariables:[{name:'aux_muted',type:'boolean'}]};
+    build.currentPage = main;
+    assert.equal(build.getNativeUserWidgetParams(button), ', bool prop_show_toggle, bool prop_show_mute');
+    assert.equal(build.getUserWidgetStateParam(instance), ', true, get_var_aux_muted()');
+    assert.equal(build.getNativeBooleanPropertyValue(button, '!show_mute'), '!prop_show_mute');
+    assert.equal(build.getNativeBooleanPropertyValue(main, 'show_mute'), undefined);
+    build.currentPage = outer;
+    instance.userPropertyValues.values.toggle = 'enabled';
+    instance.userPropertyValues.values.mute = '!enabled';
+    assert.equal(build.getUserWidgetStateParam(instance), ', prop_enabled, !prop_enabled');
+    instance.userPropertyValues.values.toggle = 'true || unexpected()';
+    assert.throws(() => build.getUserWidgetStateParam(instance), /Unsupported native boolean property/);
+    build.project.projectTypeTraits.hasFlowSupport = true;
+    assert.equal(build.getNativeUserWidgetParams(button), '');
+    assert.equal(build.getNativeBooleanPropertyValue(button, '!show_mute'), undefined);
+    assert.equal(build.getUserWidgetStateParam(instance), '');
+});

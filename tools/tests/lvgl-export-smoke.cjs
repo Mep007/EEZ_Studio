@@ -73,7 +73,7 @@ slots.forEach((accessor, index) => {
         spans.get(instance).length++;
     }
 });
-const calls = [...code.matchAll(/\bcreate_user_widget_(\w+)\(obj,\s*(\d+)\);/g)];
+const calls = [...code.matchAll(/\bcreate_user_widget_(\w+)\(obj,\s*(\d+)(?:,\s*[^;]+)?\);/g)];
 assert.equal(calls.length, spans.size, 'Each instance needs its own contiguous storage');
 for (const call of calls) {
     const start = Number(call[2]);
