@@ -1,0 +1,50 @@
+EEZ Studio MEP Fork 1.1.2
+========================
+Date:2026-11-01
+Branch:mesp-lvgl-codegen-v0.29
+Upstream version remains0.29.0; app ID and existing editor settings unchanged.
+
+Fix
+---
+Generated text, binary resources and the build manifest now use a temporary
+file in the destination directory followed by atomic replacement. Existing
+outputs are not opened with truncation. This fixes the locally reproduced
+UNKNOWN/open screens.h export failure. Unchanged files retain their timestamps.
+If replacement fails, the previous output is retained and the temporary file
+is removed. Non-regular output targets are rejected rather than followed.
+
+This is generated-output protection, not whole-export transactionality.
+An error can still leave a mixture of successfully generated and older files;
+do not compile an export reporting errors. No generated UI files need deleting
+and no broad permission or security-setting changes are required.
+
+Validation
+----------
+Run npm run test:mep in a C compiler environment and npm run build-src.
+The regression suite includes generated C bridge lifecycle, nested widgets,
+atomic text/binary replacement, unchanged-output timestamps and injected
+replacement failure retaining the original output.
+
+Windows packaging
+-----------------
+Keep prior dist releases. Use electron-builder --win nsis --x64 with the existing
+electron-builder.yml, win.signAndEditExecutable=false, publish never, output
+dist/mep-fork-v1.1.2 and artifactName EEZ Studio MEP FORK v1.1.2 Setup.exe.
+The installer remains unsigned. Verify packaged and installed MEP identity and
+export the saved user project before reporting installation complete.
+
+Release verification and installation
+------------------------------------
+Production build and all11 MEP regression tests passed, including execution of
+the generated C lifecycle. Packaged MESP602 export passed with154 pointer slots,
+10 UserWidget instances and compiled C layout assertions.
+Installer completed with exit0 after the user saved and closed EEZ. Installed
+app.asar matches the verified package. The user then confirmed generation works
+in the editor. Existing project edits and editor settings were preserved.
+No thermostat firmware was flashed as part of this release.
+
+Installer:dist/mep-fork-v1.1.2/EEZ Studio MEP FORK v1.1.2 Setup.exe
+Size:128579685 bytes
+SHA256:25BD7AEE4E31492D9296322DB964CA5043A2BE0CE048EB9D87BA4824227A9CD4
+Installed/package app.asar SHA256:
+30FCF16CE767419350A2CA2D823B64BC10103ABF4BC22DD7E3420956AAFD1104

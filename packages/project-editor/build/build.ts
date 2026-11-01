@@ -2,11 +2,8 @@ import path from "path";
 import fs from "fs";
 import { createTransformer } from "mobx-utils";
 
-import {
-    writeTextFile as originalWriteTextFile,
-    writeBinaryData as originalWriteBinaryData,
-    makeFolder
-} from "eez-studio-shared/util-electron";
+import { makeFolder } from "eez-studio-shared/util-electron";
+import { writeGeneratedOutput } from "./write-output";
 
 import type { BuildResult } from "project-editor/store/features";
 import {
@@ -130,7 +127,7 @@ export async function writeTextFile(
         content = normalizeLineEndingsToLf(content);
     }
     
-    await originalWriteTextFile(filePath, content);
+    await writeGeneratedOutput(filePath, content);
     if (trackingDestinationFolder) {
         trackBuildFile(filePath, trackingDestinationFolder);
     }
@@ -140,7 +137,7 @@ export async function writeBinaryData(
     filePath: string,
     data: Buffer
 ): Promise<void> {
-    await originalWriteBinaryData(filePath, data);
+    await writeGeneratedOutput(filePath, data);
     if (trackingDestinationFolder) {
         trackBuildFile(filePath, trackingDestinationFolder);
     }
@@ -173,10 +170,9 @@ async function saveManifest(
         files: files.sort() // Sort for consistency
     };
 
-    await fs.promises.writeFile(
+    await writeGeneratedOutput(
         manifestPath,
-        JSON.stringify(manifest, null, 2),
-        "utf-8"
+        JSON.stringify(manifest, null, 2)
     );
 }
 
